@@ -234,16 +234,44 @@ export class ServiceTitanClient {
   /**
    * List Inventory Locations for this tenant -- backs the review table's
    * Inventory Location dropdown via GET /api/inventory-locations.
-   * PurchaseOrders_Create requires inventoryLocationId as a top-level
-   * field (confirmed via a live 400 once item-level validation started
-   * passing). Endpoint (unverified against live docs, but plausible given
-   * the Inventory API's module structure, following the same
-   * /inventory/v2/tenant/{tenant}/... pattern as the other Inventory API
-   * calls in this file): GET /inventory/v2/tenant/{tenant}/inventory-locations.
-   * Same single-page-only caveat as listBusinessUnits().
+   * PurchaseOrders_Create requires inventoryLocationId as a top-level field
+   * (confirmed via a live 400 once item-level validation started passing).
+   *
+   * CORRECTED: the original guess (GET .../inventory-locations) 404'd with
+   * "Unable to match incoming request to an operation" -- that resource
+   * doesn't exist. Researched properly this time rather than guessing again:
+   *   - developer.servicetitan.io's API reference is a JS-rendered SPA that
+   *     can't be fetched directly (same problem as the shipTo/shipping
+   *     research earlier), so it couldn't be checked directly.
+   *   - A third-party API profile (grokipedia.com/page/ServiceTitan_API_scopes)
+   *     independently describes an Inventory API "Warehouses" scope for
+   *     "inventory sites tied to locations" -- i.e. what ServiceTitan's own
+   *     product UI calls "Inventory Locations" is the "Warehouses" resource
+   *     in the API.
+   *   - A reconstructed OpenAPI spec (github.com/api-evangelist/servicetitan,
+   *     openapi/_original/servicetitan-inventory-api-openapi.yml) independently
+   *     lists a GET /warehouses operation under the Inventory API, tags:
+   *     [Purchase Orders, Vendors, Warehouses, Trucks, Adjustments, Transfers,
+   *     Returns, Receipts] -- no separate "inventory-locations" resource at all.
+   *
+   * Two independent sources agreeing on "Warehouses" is real evidence, not
+   * just a repeated guess -- but neither is ServiceTitan's own live schema,
+   * and that second spec's own PurchaseOrders_Create schema uses a
+   * DIFFERENT field name (warehouseId) than what our live 400 actually
+   * confirmed (inventoryLocationId) -- proof that spec doesn't fully match
+   * the real current API, so treat the exact response shape below as a
+   * guess too, not just the path. Path assembled by swapping the resource
+   * segment onto our own ALREADY-CONFIRMED-WORKING tenant-scoped URL
+   * convention (/inventory/v2/tenant/{tenant}/... -- confirmed working
+   * because PurchaseOrders_Create reaches real field validation, not a 404,
+   * on that exact path pattern), rather than trusting the third-party
+   * spec's own (differently-shaped, tenant-segment-less) server URL.
+   *
+   * STILL NOT LIVE-VERIFIED. Test against the sandbox tenant before relying
+   * on this.
    */
   async listInventoryLocations(): Promise<InventoryLocation[]> {
-    const url = new URL(`${API_BASES[this.environment]}/inventory/v2/tenant/${this.tenantId}/inventory-locations`);
+    const url = new URL(`${API_BASES[this.environment]}/inventory/v2/tenant/${this.tenantId}/warehouses`);
     url.searchParams.set("pageSize", "200");
     const resp = await fetch(url, { headers: await this.headers() });
     if (!resp.ok) {
