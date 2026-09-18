@@ -66,7 +66,13 @@ export function InvoiceUploader() {
   }
 
   if (stage === "review" && extractedInvoice) {
-    return <ReviewTable invoice={extractedInvoice} onConfirm={handleConfirm} />;
+    return (
+      <ReviewTable
+        invoice={extractedInvoice}
+        onConfirm={handleConfirm}
+        onCancel={() => setStage("upload")}
+      />
+    );
   }
 
   if (stage === "extracting") {

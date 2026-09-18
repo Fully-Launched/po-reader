@@ -7,7 +7,7 @@ PO-Reader is an internal tool built for **Comfort x Design**, a single ServiceTi
 **Flow:**
 1. User drags a vendor invoice PDF into the app.
 2. The Claude API extracts structured invoice data from the PDF: vendor name, invoice number, invoice date, project number, line items (description, quantity, unit price, total), tax amount, subtotal, total, plus an `extraction_confidence` rating and free-text `notes`.
-3. A human reviews and corrects the extracted data in an editable table. Invoices with `extraction_confidence` below `"high"`, a missing project number, or no line items are flagged for review rather than allowed to proceed silently (see `needsHumanReview` in `src/lib/servicetitan/payload-builder.ts`).
+3. A human reviews and corrects the extracted data in a fully editable table. Extraction is treated as a starting draft, not a pass/fail gate: `extraction_confidence` below `"high"`, a missing vendor name/project number, or no line items show a non-blocking warning banner (see `reviewWarnings` in `src/lib/servicetitan/payload-builder.ts`) but never disable the form — the user can add, remove, or correct any field, including ones the extraction missed entirely, before submitting. The only hard block is a document that isn't a vendor invoice at all (e.g. an internal memo) — see `isNotAnInvoice` — since there's no partial data worth editing in that case.
 4. On confirmation, the tool resolves the ServiceTitan vendor and job, then creates a Purchase Order via `PurchaseOrders_Create`.
 5. **There is no separate "receive" step.** See the important correction below.
 
@@ -33,7 +33,7 @@ This logic was ported from an earlier Python prototype (`comfort-x-design-invoic
 - **`src/lib/types.ts`** — `ExtractedInvoice` / `InvoiceLineItem`, the shape that flows extraction → review table → PO creation.
 - **`src/lib/extraction.ts`** — `extractInvoice(pdfBuffer)`: sends the PDF to Claude with a defined extraction prompt/JSON schema, parses and normalizes the response into `ExtractedInvoice`.
 - **`src/lib/servicetitan/client.ts`** — `ServiceTitanClient`: OAuth2 `client_credentials` token fetch/cache, `createPurchaseOrder`, `getPoTypeIdByName`, `findVendorByName`. `findJobByProjectNumber` is **not implemented** — throws, pending JPM API research (see Open Questions).
-- **`src/lib/servicetitan/payload-builder.ts`** — `buildPoPayload()` converts an `ExtractedInvoice` + resolved IDs into the `PurchaseOrders_Create` request body; `needsHumanReview()` is the confidence/completeness guardrail.
+- **`src/lib/servicetitan/payload-builder.ts`** — `buildPoPayload()` converts an `ExtractedInvoice` + resolved IDs into the `PurchaseOrders_Create` request body. Three review/guardrail functions, all pure (safe to call from client or server code): `reviewWarnings()` / `needsHumanReview()` are non-blocking — they surface a warning banner but never disable submission; `isNotAnInvoice()` is the one hard-block gate (document isn't a vendor invoice at all); `hasRequiredFields()` is the actual submission gate (vendor name, project number, and at least one valid line item present, regardless of confidence or how they got there).
 
 ### API Routes
 
@@ -41,7 +41,7 @@ This logic was ported from an earlier Python prototype (`comfort-x-design-invoic
   Accepts a PDF upload (`multipart/form-data`, field `file`), calls `extractInvoice()`, returns the structured `ExtractedInvoice`.
 
 - **`/api/create-po`**
-  Takes the human-reviewed `ExtractedInvoice` (plus a `businessUnitId` — see below), resolves the ServiceTitan vendor (`findVendorByName`) and job (`findJobByProjectNumber` — currently unimplemented, so this route currently always 501s at that step), resolves the auto-receive PO Type ID, builds the payload, and calls `PurchaseOrders_Create`. Re-runs the `needsHumanReview` guardrail server-side as defense in depth even though the frontend should already block low-confidence submissions.
+  Takes the human-reviewed `ExtractedInvoice` (plus a `businessUnitId` — see below), resolves the ServiceTitan vendor (`findVendorByName`) and job (`findJobByProjectNumber` — currently unimplemented, so this route currently always 501s at that step), resolves the auto-receive PO Type ID, builds the payload, and calls `PurchaseOrders_Create`. Re-runs `isNotAnInvoice` and `hasRequiredFields` server-side as defense in depth even though the frontend should already gate on the same checks — does NOT re-check confidence, since low confidence is not a submission blocker (see Flow above).
 
   **`businessUnitId` is currently supplied by the user in the review table**, not looked up — no business-unit resolution logic has been built yet (see Open Questions).
 

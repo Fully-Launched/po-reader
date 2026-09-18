@@ -7,18 +7,30 @@ import type { ExtractedInvoice } from "./types";
 const EXTRACTION_PROMPT = `You are extracting structured data from a vendor invoice for a \
 Purchase Order to be created in ServiceTitan.
 
-Read the attached invoice and call the extract_invoice tool with the data. Extract \
-every line item -- invoices can have 30+ line items; do not summarize or omit any.
+First, decide whether the attached document is actually a vendor invoice at all (an \
+itemized bill from a vendor for goods/materials/services). Set is_invoice to false if it \
+is clearly something else -- an internal memo, a letter, a random unrelated document, a \
+blank/unreadable page -- and there is no invoice data to extract. In that case still call \
+the tool, but leave the other fields empty/zeroed (vendor_name: "", line_items: [], \
+subtotal/total: 0, etc.) and use notes to explain what the document actually is.
+
+If it IS an invoice (even a partial, messy, or low-confidence one), set is_invoice to true \
+and extract everything you can -- do not withhold a field just because you're unsure of \
+it; extract your best reading and reflect uncertainty via extraction_confidence and notes \
+instead. A human will review and correct this before it's submitted anywhere.
+
+Call the extract_invoice tool with the data. Extract every line item -- invoices can have \
+30+ line items; do not summarize or omit any.
 
 Field notes:
 - project_number: the job/project number referenced on the invoice, if any. NOT always a
   clearly-labeled field. Some vendors (e.g. Arco Supply) embed it in a footer line like
   "Cost to Location: J700.15" rather than a dedicated field -- look at header codes
   (JOB#, ID#, YOUR#) AND footer/memo lines, not just fields explicitly labeled "project" or "job".
-- If a field is illegible or missing, use null rather than guessing.
+- If a field is illegible or missing on a genuine invoice, use null (or "" for line item
+  description) rather than guessing.
 - Set extraction_confidence to "low" if the project number or any line item amount is
-  unclear -- this signals the tool to route the invoice to human review rather than
-  auto-submitting it.`;
+  unclear -- this signals the tool to flag the invoice for human review before submission.`;
 
 // strict: true guarantees tool_use.input validates exactly against this schema on
 // success (see claude-api skill -- Strict tool use). additionalProperties: false +
@@ -30,6 +42,10 @@ const EXTRACT_INVOICE_TOOL: Anthropic.Tool = {
   input_schema: {
     type: "object",
     properties: {
+      is_invoice: {
+        type: "boolean",
+        description: "false if this document is not actually a vendor invoice (e.g. an internal memo or unrelated document)",
+      },
       vendor_name: { type: "string" },
       invoice_number: { type: "string" },
       invoice_date: { type: "string", description: "YYYY-MM-DD" },
@@ -55,6 +71,7 @@ const EXTRACT_INVOICE_TOOL: Anthropic.Tool = {
       notes: { type: "string" },
     },
     required: [
+      "is_invoice",
       "vendor_name",
       "invoice_number",
       "invoice_date",
@@ -71,6 +88,7 @@ const EXTRACT_INVOICE_TOOL: Anthropic.Tool = {
 } as Anthropic.Tool;
 
 interface RawExtraction {
+  is_invoice: boolean;
   vendor_name: string;
   invoice_number: string;
   invoice_date: string;
@@ -85,6 +103,7 @@ interface RawExtraction {
 
 function toExtractedInvoice(raw: RawExtraction): ExtractedInvoice {
   return {
+    isInvoice: raw.is_invoice,
     vendorName: raw.vendor_name,
     invoiceNumber: raw.invoice_number,
     invoiceDate: raw.invoice_date,

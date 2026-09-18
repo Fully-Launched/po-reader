@@ -18,6 +18,15 @@ export interface InvoiceLineItem {
 export type ExtractionConfidence = "high" | "medium" | "low";
 
 export interface ExtractedInvoice {
+  /**
+   * Whether the uploaded document actually looks like a vendor invoice at
+   * all (as opposed to e.g. an internal memo or unrelated document). This is
+   * the one hard-block condition in the review flow -- everything else
+   * (low confidence, missing fields) is an editable, submittable draft. See
+   * needsHumanReview / hasRequiredFields / isNotAnInvoice in
+   * src/lib/servicetitan/payload-builder.ts.
+   */
+  isInvoice: boolean;
   vendorName: string;
   invoiceNumber: string;
   invoiceDate: string; // YYYY-MM-DD

@@ -1,5 +1,6 @@
 {
   "_note": "Manually derived from a real Arco Supply invoice (client-provided sample, INV #23538) as a ground-truth test fixture -- use to validate live Claude extraction once ANTHROPIC_API_KEY is available.",
+  "is_invoice": true,
   "vendor_name": "Arco Supply Co",
   "invoice_number": "23538",
   "invoice_date": "2026-08-31",

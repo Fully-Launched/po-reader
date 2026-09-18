@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { ExtractedInvoice } from "@/lib/types";
 import { ServiceTitanClient } from "@/lib/servicetitan/client";
-import { buildPoPayload, needsHumanReview } from "@/lib/servicetitan/payload-builder";
+import { buildPoPayload, hasRequiredFields, isNotAnInvoice } from "@/lib/servicetitan/payload-builder";
 
 // Name of the PO Type with "Automatically Receive" enabled. Confirmed to
 // exist as "Supply House Run" in the sandbox -- this is the ONLY way a PO
@@ -41,11 +41,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Defense in depth -- the review table should already block submission on
-  // low-confidence/incomplete extractions, but never trust the client alone.
-  if (needsHumanReview(invoice)) {
+  // Hard block: the document doesn't look like a vendor invoice at all, so
+  // there's nothing meaningful to have reviewed or submitted. Low confidence
+  // / missing fields alone do NOT block here -- the review table lets the
+  // user correct those before submission, and hasRequiredFields (below) is
+  // the real gate on that corrected data.
+  if (isNotAnInvoice(invoice)) {
     return NextResponse.json(
-      { error: "Invoice failed the human-review guardrail (low confidence, missing project number, or no line items)" },
+      { error: "This document does not appear to be a vendor invoice -- nothing to submit." },
+      { status: 422 },
+    );
+  }
+
+  // Defense in depth -- the review table should already disable submission
+  // until these are filled in, but never trust the client alone.
+  if (!hasRequiredFields(invoice)) {
+    return NextResponse.json(
+      { error: "Missing required fields: vendor name, project number, and at least one valid line item are required." },
       { status: 422 },
     );
   }

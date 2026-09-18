@@ -55,13 +55,55 @@ export function buildPoPayload({
 }
 
 /**
- * Simple guardrail: flag anything not clearly high-confidence for manual
- * review before it's ever submitted to ServiceTitan. This is the safety
- * check behind the review table step in the frontend.
+ * Human-readable reasons this invoice is worth a second look before
+ * submitting -- shown as a warning banner in the review table, but does NOT
+ * block submission. Low confidence / missing fields are expected outcomes of
+ * extraction on a messy real-world invoice; the fix is letting the user
+ * correct the draft, not refusing to show it. Only isNotAnInvoice() and
+ * hasRequiredFields() below are actual submission gates.
  */
+export function reviewWarnings(invoice: ExtractedInvoice): string[] {
+  const warnings: string[] = [];
+  if (invoice.extractionConfidence !== "high") {
+    warnings.push(`extraction confidence is "${invoice.extractionConfidence}"`);
+  }
+  if (!invoice.vendorName.trim()) {
+    warnings.push("vendor name not confidently matched");
+  }
+  if (!invoice.projectNumber?.trim()) {
+    warnings.push("no project number found");
+  }
+  if (invoice.lineItems.length === 0) {
+    warnings.push("no line items extracted");
+  }
+  return warnings;
+}
+
+/** True if there's anything worth flagging in the warning banner (see reviewWarnings). */
 export function needsHumanReview(invoice: ExtractedInvoice): boolean {
-  if (invoice.extractionConfidence !== "high") return true;
-  if (!invoice.projectNumber) return true;
-  if (invoice.lineItems.length === 0) return true;
-  return false;
+  return reviewWarnings(invoice).length > 0;
+}
+
+/**
+ * The one hard-block condition: the document doesn't look like a vendor
+ * invoice at all (e.g. an internal memo), so there's no meaningful partial
+ * data to edit into a draft. Everything else is an editable, submittable
+ * draft -- see reviewWarnings/needsHumanReview for the non-blocking case.
+ */
+export function isNotAnInvoice(invoice: ExtractedInvoice): boolean {
+  return !invoice.isInvoice;
+}
+
+/**
+ * The actual submission gate: required fields must be filled in, whether by
+ * extraction or by manual correction in the review table. Confidence and
+ * "was this auto-extracted vs. hand-typed" are irrelevant here -- only
+ * whether the data needed to create a ServiceTitan PO is present.
+ */
+export function hasRequiredFields(invoice: ExtractedInvoice): boolean {
+  if (!invoice.vendorName.trim()) return false;
+  if (!invoice.projectNumber?.trim()) return false;
+  if (invoice.lineItems.length === 0) return false;
+  if (invoice.lineItems.some((item) => !item.description.trim() || item.quantity <= 0)) return false;
+  return true;
 }

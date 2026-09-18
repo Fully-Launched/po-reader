@@ -1,4 +1,5 @@
 {
+  "is_invoice": true,
   "vendor_name": "Acme HVAC Supply Co.",
   "invoice_number": "INV-88213",
   "invoice_date": "2026-08-15",
