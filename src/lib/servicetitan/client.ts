@@ -27,6 +27,12 @@ interface Vendor {
   [key: string]: unknown;
 }
 
+interface BusinessUnit {
+  id: number;
+  name: string;
+  [key: string]: unknown;
+}
+
 export class ServiceTitanClient {
   private environment: string;
   private tenantId: string;
@@ -159,6 +165,27 @@ export class ServiceTitanClient {
     const body = await resp.json();
     const results: Vendor[] = body.data ?? [];
     return results[0] ?? null;
+  }
+
+  /**
+   * List Business Units for this tenant, so a real ID can be picked for the
+   * SERVICETITAN businessUnitId currently entered manually in the review
+   * table (see CLAUDE.md open questions -- no BU resolution logic exists
+   * yet). Endpoint (unverified against live docs, but plausible given the
+   * Settings API's module structure): GET /settings/v2/tenant/{tenant}/business-units.
+   * Fetches a single page (pageSize 200) rather than following pagination --
+   * fine for a one-off lookup, not meant for production use. See the
+   * temporary /api/dev/business-units route that calls this.
+   */
+  async listBusinessUnits(): Promise<BusinessUnit[]> {
+    const url = new URL(`${API_BASES[this.environment]}/settings/v2/tenant/${this.tenantId}/business-units`);
+    url.searchParams.set("pageSize", "200");
+    const resp = await fetch(url, { headers: await this.headers() });
+    if (!resp.ok) {
+      throw new Error(`listBusinessUnits failed: ${resp.status} ${await resp.text()}`);
+    }
+    const body = await resp.json();
+    return body.data ?? [];
   }
 
   /**
