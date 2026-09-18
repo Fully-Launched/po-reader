@@ -6,11 +6,11 @@
   "invoice_date": "2026-08-31",
   "project_number": "700.15",
   "line_items": [
-    {"description": "GALV ELBOW 6\" - 30GA", "quantity": 12, "unit_price": 2.56, "total": 30.72},
-    {"description": "PIPE: 6\"X FIVE FOOT WA", "quantity": 20, "unit_price": 8.17, "total": 163.40},
-    {"description": "6 ON 8-12\" SADDLE TEE", "quantity": 1, "unit_price": 3.74, "total": 3.74},
-    {"description": "6\" SPIN COLLAR 2.5\"Lg.LE", "quantity": 3, "unit_price": 2.34, "total": 7.02},
-    {"description": "ARCOFLEX 6\"X25'SLVR JKT R", "quantity": 2, "unit_price": 60.91, "total": 121.82}
+    {"description": "GALV ELBOW 6\" - 30GA", "quantity": 12, "unit_price": 2.56, "total": 30.72, "vendor_part_number": null},
+    {"description": "PIPE: 6\"X FIVE FOOT WA", "quantity": 20, "unit_price": 8.17, "total": 163.40, "vendor_part_number": null},
+    {"description": "6 ON 8-12\" SADDLE TEE", "quantity": 1, "unit_price": 3.74, "total": 3.74, "vendor_part_number": null},
+    {"description": "6\" SPIN COLLAR 2.5\"Lg.LE", "quantity": 3, "unit_price": 2.34, "total": 7.02, "vendor_part_number": null},
+    {"description": "ARCOFLEX 6\"X25'SLVR JKT R", "quantity": 2, "unit_price": 60.91, "total": 121.82, "vendor_part_number": null}
   ],
   "tax_amount": 25.32,
   "subtotal": 326.70,

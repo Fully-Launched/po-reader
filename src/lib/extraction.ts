@@ -30,6 +30,10 @@ Field notes:
   line like "Cost to Location: J700.15" rather than a dedicated field -- look at header
   codes (JOB#, ID#, YOUR#) AND footer/memo lines, not just fields explicitly labeled
   "project" or "job".
+- vendor_part_number: the VENDOR's own part/SKU code for that line item, if printed (e.g.
+  Arco Supply invoices show codes like "301/D" alongside a generic description). This is
+  distinct from any ServiceTitan-internal identifier -- just transcribe whatever code the
+  vendor printed. Use null if the line item has no separate part number field.
 - If a field is illegible or missing on a genuine invoice, use null (or "" for line item
   description) rather than guessing.
 - Set extraction_confidence to "low" if any line item amount is unclear, or if the
@@ -65,8 +69,9 @@ const EXTRACT_INVOICE_TOOL: Anthropic.Tool = {
             quantity: { type: "number" },
             unit_price: { type: "number" },
             total: { type: "number" },
+            vendor_part_number: { type: ["string", "null"] },
           },
-          required: ["description", "quantity", "unit_price", "total"],
+          required: ["description", "quantity", "unit_price", "total", "vendor_part_number"],
           additionalProperties: false,
         },
       },
@@ -99,7 +104,13 @@ interface RawExtraction {
   invoice_number: string;
   invoice_date: string;
   project_number: string | null;
-  line_items: { description: string; quantity: number; unit_price: number; total: number }[];
+  line_items: {
+    description: string;
+    quantity: number;
+    unit_price: number;
+    total: number;
+    vendor_part_number: string | null;
+  }[];
   tax_amount: number | null;
   subtotal: number;
   total: number;
@@ -119,6 +130,7 @@ function toExtractedInvoice(raw: RawExtraction): ExtractedInvoice {
       quantity: item.quantity,
       unitPrice: item.unit_price,
       total: item.total,
+      vendorPartNumber: item.vendor_part_number,
     })),
     taxAmount: raw.tax_amount,
     subtotal: raw.subtotal,

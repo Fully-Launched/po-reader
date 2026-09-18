@@ -9,13 +9,15 @@
       "description": "2-ton condenser unit",
       "quantity": 1,
       "unit_price": 1450.00,
-      "total": 1450.00
+      "total": 1450.00,
+      "vendor_part_number": null
     },
     {
       "description": "Copper line set 25ft",
       "quantity": 2,
       "unit_price": 85.50,
-      "total": 171.00
+      "total": 171.00,
+      "vendor_part_number": null
     }
   ],
   "tax_amount": 97.28,

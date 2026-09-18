@@ -15,7 +15,7 @@ interface BusinessUnit {
   name: string;
 }
 
-const EMPTY_LINE_ITEM: InvoiceLineItem = { description: "", quantity: 1, unitPrice: 0, total: 0 };
+const EMPTY_LINE_ITEM: InvoiceLineItem = { description: "", quantity: 1, unitPrice: 0, total: 0, vendorPartNumber: null };
 
 // Editable table shown between extraction and submission. This is the
 // human-in-the-loop checkpoint: nothing is sent to ServiceTitan until the
@@ -164,6 +164,7 @@ export function ReviewTable({ invoice, onConfirm, onCancel }: ReviewTableProps) 
         <thead>
           <tr>
             <th>Description</th>
+            <th>Vendor Part #</th>
             <th>Quantity</th>
             <th>Unit Price</th>
             <th>Total</th>
@@ -179,6 +180,14 @@ export function ReviewTable({ invoice, onConfirm, onCancel }: ReviewTableProps) 
                   placeholder="Item description"
                   value={item.description}
                   onChange={(e) => updateLineItem(i, "description", e.target.value)}
+                />
+              </td>
+              <td>
+                <input
+                  type="text"
+                  placeholder="Vendor's part/SKU code (if any)"
+                  value={item.vendorPartNumber ?? ""}
+                  onChange={(e) => updateLineItem(i, "vendorPartNumber", e.target.value.trim() === "" ? null : e.target.value)}
                 />
               </td>
               <td>

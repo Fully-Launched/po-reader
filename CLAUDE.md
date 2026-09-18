@@ -21,6 +21,14 @@ The **only** way a PO ends up `Received` (and, if enabled, auto-generates a bill
 
 `ServiceTitanClient.updatePurchaseOrder()` exists in the client but is explicitly **not** for status changes — see the warning comment on that method.
 
+### Important correction: line items need a real Pricebook skuId
+
+An earlier version of `buildPoPayload()` (ported from the Python prototype) sent each line item as `{ skuName, quantity, price, total }`. **This is wrong** — a live `PurchaseOrders_Create` 400 confirmed the real required item properties are `cost`, `skuId`, `description`, and `vendorPartNumber`, not `price`/`skuName`. The field-name mismatch was the easy part to fix; the real issue is `skuId`: it must reference an **existing ServiceTitan Pricebook item**, not free text. Claude's extraction alone can never produce this — it has to be resolved via a lookup.
+
+`ServiceTitanClient.findMaterialSkuIdByDescription()` does a **naive, first-pass** description-text match against Pricebook Materials (using the Read-only Pricebook scope already granted) as a stopgap so PO creation works for cleanly-matching invoices. This is explicitly NOT the real matching strategy — see the "Line-item → pricebook matching" open question below, still unresolved. `/api/create-po` now fails with a clear `422` naming exactly which line-item descriptions had no Pricebook match, rather than either guessing a SKU or letting the raw ServiceTitan 400 surface confusingly.
+
+`ExtractedInvoice`'s line items also gained a `vendorPartNumber` field (the vendor's own part code, e.g. Arco's `"301/D"`) since ServiceTitan requires it per item — this is separate from, and does NOT help resolve, the Pricebook `skuId`.
+
 ### Job attachment is optional, not required
 
 These invoices are for **general inventory/bulk restock purchases**, not tied to specific jobs — this is the expected norm, pending final confirmation from the client on whether any of their invoices actually ARE job-tied. `PurchaseOrders_Create` proceeds using just vendor, line items, and Business Unit ID when no job is attached; `jobId` is omitted from the payload entirely rather than sent as null/undefined (see `buildPoPayload()`).
@@ -71,7 +79,7 @@ The review table is a deliberate design choice, not a placeholder to be removed 
   - Vendors — Read/Write
   - Receipts — Read/Write
   - Inventory Bills — Read only
-  - Pricebook Categories / Equipment / Materials — Read only
+  - Pricebook Categories / Equipment / Materials — Read only (now actively used by `findMaterialSkuIdByDescription()` for the line-item skuId lookup -- see the important correction above)
 
   Note: the Receipts scope was granted before it was confirmed that no receive endpoint exists (see correction above). It's likely unused by this tool, but left as-is unless it turns out to be needed for something else (e.g. reading receipt records after the fact).
 
@@ -79,7 +87,7 @@ The review table is a deliberate design choice, not a placeholder to be removed 
 
 - [x] **Receive-via-API / auto-bill** — FULLY CONFIRMED, and confirmed differently than first assumed (see correction above). Resolved: create the PO with an Automatically-Receive PO Type; there is no separate receive call.
 - [ ] **Invoice → project number matching** — mostly resolved for Arco-style invoices: every sample invoice carries a consistent `Cost to Location: J700.15`-style footer line (also mirrored in header fields `JOB#`/`ID#`), a fixed-position structured field rather than free text. Still needs confirming that the equivalent field is equally consistent across the other 2 vendors once their samples arrive.
-- [ ] **Line-item → pricebook matching** — a real open decision, not resolved by invoice-format consistency. Arco's line items use their own part numbers and generic descriptions (e.g. `301/D`, `"GALV ELBOW 6\" - 30GA"`) that won't match ServiceTitan pricebook SKUs directly. Needs a decision: build a real mapping table, or push materials through as a generic line item with the vendor description kept as a memo/note. Worth asking Kd how she currently handles this in her manual entry.
+- [ ] **Line-item → pricebook matching** — a real open decision, not resolved by invoice-format consistency. Arco's line items use their own part numbers and generic descriptions (e.g. `301/D`, `"GALV ELBOW 6\" - 30GA"`) that won't match ServiceTitan pricebook SKUs directly. Needs a decision: build a real mapping table, or push materials through as a generic line item with the vendor description kept as a memo/note. Worth asking Kd how she currently handles this in her manual entry. **This is now a hard requirement, not just a nice-to-have**: a live `PurchaseOrders_Create` 400 confirmed each `items[]` entry requires a real `skuId` referencing an existing Pricebook item, or the whole PO creation fails. `ServiceTitanClient.findMaterialSkuIdByDescription()` does a naive description-text match against Pricebook Materials as a stopgap (`/api/create-po` fails clearly, listing unmatched descriptions, rather than guessing) — this is explicitly a placeholder, not the real strategy this bullet is still asking for.
 - [x] **Tax handling** — CONFIRMED invoice-level (not per-line-item), based on a real Arco sample. `buildPoPayload()` puts tax on the PO, not per line item.
 - [ ] **Vendor ID lookup** — `findVendorByName()` hits a plausible `GET /inventory/v2/tenant/{tenant}/vendors?name=` endpoint — unverified against the live API reference, confirm exact path/query param once developer access is available.
 - [ ] **Job/project ID lookup** — `findJobByProjectNumber()` is not implemented. Will likely call the JPM API's Projects or Jobs list endpoint and match on a project number field; exact field name needs confirming against Comfort x Design's real data. **No longer blocks `/api/create-po`** — job attachment is best-effort/optional (these are mostly bulk/inventory purchases, not job-tied), so this is worth implementing for the minority of invoices that ARE job-tied, but not a launch blocker. Still pending final client confirmation on whether any of their invoices are actually job-tied at all.
@@ -112,12 +120,12 @@ All of the following must be set as **Vercel environment variables** — never c
 ## Status Checklist
 
 - [ ] Sandbox extraction flow working (`/api/extract-invoice` reliably returns correct data from real vendor invoice PDFs, across all 3 vendors)
-- [ ] Sandbox PO creation working end-to-end (`/api/create-po` successfully creates and auto-receives a PO in the ServiceTitan sandbox tenant — no longer blocked on job lookup, since job attachment is optional; blocked only on vendor lookup verification below)
+- [ ] Sandbox PO creation working end-to-end (`/api/create-po` successfully creates and auto-receives a PO in the ServiceTitan sandbox tenant — no longer blocked on job lookup, since job attachment is optional; still depends on vendor lookup and pricebook `skuId` matching both succeeding, see below)
 - [x] Sandbox auto-receive/auto-bill mechanism confirmed (no Receipts API call needed — PO Type's "Automatically Receive" setting handles it at creation time)
 - [x] Job attachment confirmed optional (bulk/inventory purchases, not job-tied) — pending final client confirmation on whether ANY invoices are job-tied
 - [ ] Vendor ID lookup verified against live sandbox API
 - [ ] Job/project ID lookup implemented and verified (best-effort, not a launch blocker)
-- [ ] Line-item → pricebook matching decision made
+- [ ] Line-item → pricebook matching decision made (naive description-text stopgap in place via `findMaterialSkuIdByDescription()` — PO creation works for cleanly-matching items, but the real matching strategy is still undecided; a live 400 confirmed `skuId` is hard-required per item)
 - [x] Business unit resolution decided (dropdown via `/api/business-units`, not manual entry) — still needs `listBusinessUnits()`'s endpoint verified against live sandbox API
 - [ ] Batch invoice delivery format confirmed with client (affects whether batch-splitting extraction logic is needed)
 - [ ] Client production credentials received (production Client ID/Secret/App Key/Tenant ID)

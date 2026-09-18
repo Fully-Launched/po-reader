@@ -13,6 +13,15 @@ export interface InvoiceLineItem {
   quantity: number;
   unitPrice: number;
   total: number;
+  /**
+   * The vendor's own part/SKU number for this item, if printed on the
+   * invoice (e.g. Arco Supply uses codes like "301/D"). ServiceTitan's
+   * PurchaseOrders_Create requires a vendorPartNumber per line item -- see
+   * buildPoPayload() in src/lib/servicetitan/payload-builder.ts. This is
+   * NOT the same as ServiceTitan's own Pricebook skuId, which has to be
+   * looked up separately (see ServiceTitanClient.findMaterialSkuIdByDescription).
+   */
+  vendorPartNumber: string | null;
 }
 
 export type ExtractionConfidence = "high" | "medium" | "low";

@@ -2,12 +2,18 @@
 // PurchaseOrders_Create endpoint expects.
 //
 // Ported from the comfort-x-design-invoice-tool prototype's
-// servicetitan/payload_builder.py.
+// servicetitan/payload_builder.py, then corrected against a live 400 from
+// PurchaseOrders_Create: the prototype's field names (skuName/price) were
+// wrong, and each item also requires a real skuId referencing an existing
+// ServiceTitan Pricebook item -- see ServiceTitanClient.findMaterialSkuIdByDescription()
+// and the "Line-item -> pricebook matching" open question in CLAUDE.md.
 //
 // NOTE: field names below are modeled on the publicly documented Inventory
-// API shape. Verify exact field names (e.g. whether tax is PO-level or
-// per-line -- confirmed PO-level against a real Arco Supply sample) against
-// the live API reference before this goes to production.
+// API shape plus that live 400's error detail. Verify against the live API
+// reference before this goes to production (e.g. whether "total" is also
+// accepted/needed per item -- currently omitted since it wasn't in the
+// live error's list of required item properties and is presumably derived
+// server-side from cost * quantity).
 
 import type { ExtractedInvoice } from "../types";
 
@@ -32,6 +38,17 @@ export interface BuildPoPayloadArgs {
    * ServiceTitanClient.getPoTypeIdByName().
    */
   poTypeId: number;
+  /**
+   * Resolved ServiceTitan Pricebook Material skuId for each line item, in
+   * the SAME ORDER as invoice.lineItems -- REQUIRED. ServiceTitan's
+   * PurchaseOrders_Create rejects items[] entries with a 400 unless skuId
+   * references a real Pricebook item; free-text descriptions alone are not
+   * accepted. Resolve these via
+   * ServiceTitanClient.findMaterialSkuIdByDescription() before calling
+   * buildPoPayload() -- this function does no lookups itself, so every
+   * entry here must already be resolved (no nulls).
+   */
+  lineItemSkuIds: number[];
 }
 
 export function buildPoPayload({
@@ -40,12 +57,20 @@ export function buildPoPayload({
   jobId,
   businessUnitId,
   poTypeId,
+  lineItemSkuIds,
 }: BuildPoPayloadArgs): Record<string, unknown> {
-  const items = invoice.lineItems.map((item) => ({
-    skuName: item.description,
+  if (lineItemSkuIds.length !== invoice.lineItems.length) {
+    throw new Error(
+      `lineItemSkuIds length (${lineItemSkuIds.length}) does not match invoice.lineItems length (${invoice.lineItems.length})`,
+    );
+  }
+
+  const items = invoice.lineItems.map((item, i) => ({
+    skuId: lineItemSkuIds[i],
+    description: item.description,
+    vendorPartNumber: item.vendorPartNumber ?? "",
+    cost: item.unitPrice,
     quantity: item.quantity,
-    price: item.unitPrice,
-    total: item.total,
   }));
 
   return {

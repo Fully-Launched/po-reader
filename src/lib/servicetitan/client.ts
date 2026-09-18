@@ -33,6 +33,13 @@ interface BusinessUnit {
   [key: string]: unknown;
 }
 
+interface PricebookMaterial {
+  id: number;
+  displayName?: string;
+  code?: string;
+  [key: string]: unknown;
+}
+
 export class ServiceTitanClient {
   private environment: string;
   private tenantId: string;
@@ -168,14 +175,12 @@ export class ServiceTitanClient {
   }
 
   /**
-   * List Business Units for this tenant, so a real ID can be picked for the
-   * SERVICETITAN businessUnitId currently entered manually in the review
-   * table (see CLAUDE.md open questions -- no BU resolution logic exists
-   * yet). Endpoint (unverified against live docs, but plausible given the
-   * Settings API's module structure): GET /settings/v2/tenant/{tenant}/business-units.
-   * Fetches a single page (pageSize 200) rather than following pagination --
-   * fine for a one-off lookup, not meant for production use. See the
-   * temporary /api/dev/business-units route that calls this.
+   * List Business Units for this tenant -- backs the review table's Business
+   * Unit dropdown via GET /api/business-units. Endpoint (unverified against
+   * live docs, but plausible given the Settings API's module structure):
+   * GET /settings/v2/tenant/{tenant}/business-units. Fetches a single page
+   * (pageSize 200) rather than following pagination -- fine while the
+   * tenant has a small number of BUs, revisit if that stops being true.
    */
   async listBusinessUnits(): Promise<BusinessUnit[]> {
     const url = new URL(`${API_BASES[this.environment]}/settings/v2/tenant/${this.tenantId}/business-units`);
@@ -186,6 +191,38 @@ export class ServiceTitanClient {
     }
     const body = await resp.json();
     return body.data ?? [];
+  }
+
+  /**
+   * Look up a ServiceTitan Pricebook Material's skuId by matching on its
+   * name/description. REQUIRED for PurchaseOrders_Create -- ServiceTitan's
+   * items[] schema rejects a line item with a 400 ("required properties
+   * cost, skuId, description, and vendorPartNumber are missing") unless
+   * skuId references a real Pricebook item; free text alone isn't accepted.
+   *
+   * This is a NAIVE first-pass matcher: exact/best-effort text match against
+   * whatever Claude extracted as the line item description. It is NOT the
+   * real matching strategy -- see CLAUDE.md "Line-item -> pricebook
+   * matching", still an open decision (exact-match mapping table vs. fuzzy
+   * matching vs. a generic catch-all SKU for anything unmatched). Treat this
+   * as a placeholder that makes PO creation work for cleanly-matching items,
+   * not a finished solution.
+   *
+   * Endpoint (unverified against live docs, but plausible given the
+   * Pricebook API's module structure; uses the Read-only Pricebook
+   * Materials/Equipment scope already granted -- see CLAUDE.md scopes):
+   * GET /pricebook/v2/tenant/{tenant}/materials, filtered by name.
+   */
+  async findMaterialSkuIdByDescription(description: string): Promise<number | null> {
+    const url = new URL(`${API_BASES[this.environment]}/pricebook/v2/tenant/${this.tenantId}/materials`);
+    url.searchParams.set("name", description);
+    const resp = await fetch(url, { headers: await this.headers() });
+    if (!resp.ok) {
+      throw new Error(`findMaterialSkuIdByDescription failed: ${resp.status} ${await resp.text()}`);
+    }
+    const body = await resp.json();
+    const results: PricebookMaterial[] = body.data ?? [];
+    return results[0]?.id ?? null;
   }
 
   /**

@@ -102,12 +102,39 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Each line item needs a real ServiceTitan Pricebook skuId -- PurchaseOrders_Create
+  // rejects free-text-only items with a 400. This is a naive first-pass
+  // description match, not the real matching strategy (see
+  // ServiceTitanClient.findMaterialSkuIdByDescription and the "Line-item ->
+  // pricebook matching" open question in CLAUDE.md). Fail loudly and name
+  // exactly which line items didn't match, rather than guessing a SKU or
+  // silently dropping the item.
+  const lineItemSkuIds: number[] = [];
+  const unmatchedDescriptions: string[] = [];
+  for (const item of invoice.lineItems) {
+    const skuId = await client.findMaterialSkuIdByDescription(item.description);
+    if (skuId === null) {
+      unmatchedDescriptions.push(item.description);
+    } else {
+      lineItemSkuIds.push(skuId);
+    }
+  }
+  if (unmatchedDescriptions.length > 0) {
+    return NextResponse.json(
+      {
+        error: `No matching ServiceTitan Pricebook item found for: ${unmatchedDescriptions.map((d) => `"${d}"`).join(", ")}. Correct the description in the review table to match an existing Pricebook item name, or resolve the line-item-to-pricebook matching strategy (see CLAUDE.md open questions) before this invoice can be submitted.`,
+      },
+      { status: 422 },
+    );
+  }
+
   const payload = buildPoPayload({
     invoice,
     vendorId: vendor.id,
     jobId,
     businessUnitId,
     poTypeId,
+    lineItemSkuIds,
   });
 
   try {
