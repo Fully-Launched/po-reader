@@ -7,37 +7,68 @@ import type { ExtractedInvoice } from "./types";
 const EXTRACTION_PROMPT = `You are extracting structured data from a vendor invoice for a \
 Purchase Order to be created in ServiceTitan.
 
-Read the attached invoice and return ONLY a JSON object (no preamble, no markdown \
-fences) with this exact shape:
+Read the attached invoice and call the extract_invoice tool with the data. Extract \
+every line item -- invoices can have 30+ line items; do not summarize or omit any.
 
-{
-  "vendor_name": string,
-  "invoice_number": string,
-  "invoice_date": string (YYYY-MM-DD),
-  "project_number": string or null,   // the job/project number referenced on the invoice, if any.
-                                       // NOTE: this is not always a clearly-labeled field. Some vendors
-                                       // (e.g. Arco Supply) embed it in a footer line like
-                                       // "Cost to Location: J700.15" rather than a dedicated field --
-                                       // look at header codes (JOB#, ID#, YOUR#) AND footer/memo lines,
-                                       // not just fields explicitly labeled "project" or "job".
-  "line_items": [
-    {
-      "description": string,
-      "quantity": number,
-      "unit_price": number,
-      "total": number
-    }
-  ],
-  "tax_amount": number or null,
-  "subtotal": number,
-  "total": number,
-  "extraction_confidence": "high" | "medium" | "low",
-  "notes": string  // flag anything ambiguous, illegible, or missing -- e.g. "no project number found"
-}
+Field notes:
+- project_number: the job/project number referenced on the invoice, if any. NOT always a
+  clearly-labeled field. Some vendors (e.g. Arco Supply) embed it in a footer line like
+  "Cost to Location: J700.15" rather than a dedicated field -- look at header codes
+  (JOB#, ID#, YOUR#) AND footer/memo lines, not just fields explicitly labeled "project" or "job".
+- If a field is illegible or missing, use null rather than guessing.
+- Set extraction_confidence to "low" if the project number or any line item amount is
+  unclear -- this signals the tool to route the invoice to human review rather than
+  auto-submitting it.`;
 
-If a field is illegible or missing, use null rather than guessing. Set \
-extraction_confidence to "low" if the project number or any line item amount is unclear \
--- this signals the tool to route the invoice to human review rather than auto-submitting it.`;
+// strict: true guarantees tool_use.input validates exactly against this schema on
+// success (see claude-api skill -- Strict tool use). additionalProperties: false +
+// required are mandatory for strict mode.
+const EXTRACT_INVOICE_TOOL: Anthropic.Tool = {
+  name: "extract_invoice",
+  description: "Record the structured data extracted from a vendor invoice.",
+  strict: true,
+  input_schema: {
+    type: "object",
+    properties: {
+      vendor_name: { type: "string" },
+      invoice_number: { type: "string" },
+      invoice_date: { type: "string", description: "YYYY-MM-DD" },
+      project_number: { type: ["string", "null"] },
+      line_items: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            quantity: { type: "number" },
+            unit_price: { type: "number" },
+            total: { type: "number" },
+          },
+          required: ["description", "quantity", "unit_price", "total"],
+          additionalProperties: false,
+        },
+      },
+      tax_amount: { type: ["number", "null"] },
+      subtotal: { type: "number" },
+      total: { type: "number" },
+      extraction_confidence: { type: "string", enum: ["high", "medium", "low"] },
+      notes: { type: "string" },
+    },
+    required: [
+      "vendor_name",
+      "invoice_number",
+      "invoice_date",
+      "project_number",
+      "line_items",
+      "tax_amount",
+      "subtotal",
+      "total",
+      "extraction_confidence",
+      "notes",
+    ],
+    additionalProperties: false,
+  },
+} as Anthropic.Tool;
 
 interface RawExtraction {
   vendor_name: string;
@@ -72,6 +103,17 @@ function toExtractedInvoice(raw: RawExtraction): ExtractedInvoice {
   };
 }
 
+// Thrown when Claude's response was cut off by max_tokens before the
+// extraction tool call could complete -- distinct from a genuine extraction
+// failure so callers can surface a clear, actionable error instead of a
+// generic 502 (see /api/extract-invoice).
+export class ExtractionTruncatedError extends Error {
+  constructor() {
+    super("Claude's response was truncated before extraction completed (invoice likely has too many line items)");
+    this.name = "ExtractionTruncatedError";
+  }
+}
+
 // TODO: Arco's real invoices arrived as ONE PDF containing 18 separate invoices
 // (a monthly batch/statement), not one PDF per invoice. If that's how these
 // consistently arrive, this needs a batch-aware sibling -- e.g.
@@ -85,7 +127,13 @@ export async function extractInvoice(pdfBuffer: Buffer): Promise<ExtractedInvoic
 
   const response = await client.messages.create({
     model: "claude-opus-5",
-    max_tokens: 4096,
+    // Invoices can run 30+ line items; a low ceiling here was truncating the
+    // tool call mid-JSON on larger invoices. 16000 is the SDK's own default
+    // recommendation for non-streaming requests (stays under HTTP timeouts
+    // while giving line-item-heavy invoices enough room).
+    max_tokens: 16000,
+    tools: [EXTRACT_INVOICE_TOOL],
+    tool_choice: { type: "tool", name: "extract_invoice" },
     messages: [
       {
         role: "user",
@@ -104,28 +152,21 @@ export async function extractInvoice(pdfBuffer: Buffer): Promise<ExtractedInvoic
     ],
   });
 
-  const textBlock = response.content.find((block) => block.type === "text");
-  if (!textBlock) {
-    throw new Error("Claude's response contained no text block");
+  // Check truncation before touching content -- if generation hit the
+  // max_tokens ceiling mid-tool-call, the tool_use block (if present at all)
+  // may be incomplete. Surface this as a specific, actionable error rather
+  // than letting a malformed/partial tool input fail confusingly downstream.
+  if (response.stop_reason === "max_tokens") {
+    throw new ExtractionTruncatedError();
   }
 
-  // Defensive cleanup in case the model wraps output in code fences despite instructions
-  const rawText = textBlock.text
-    .trim()
-    .replace(/^```json/, "")
-    .replace(/^```/, "")
-    .replace(/```$/, "")
-    .trim();
-
-  let raw: RawExtraction;
-  try {
-    raw = JSON.parse(rawText);
-  } catch (e) {
-    throw new Error(
-      `Claude's response wasn't valid JSON -- inspect raw output:\n${rawText}`,
-      { cause: e },
-    );
+  const toolUseBlock = response.content.find(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+  );
+  if (!toolUseBlock) {
+    throw new Error(`Claude did not call the extract_invoice tool (stop_reason: ${response.stop_reason})`);
   }
 
-  return toExtractedInvoice(raw);
+  // strict: true guarantees this matches the schema on a normal completion.
+  return toExtractedInvoice(toolUseBlock.input as RawExtraction);
 }
