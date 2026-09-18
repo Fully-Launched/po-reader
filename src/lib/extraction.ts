@@ -122,7 +122,31 @@ export class ExtractionTruncatedError extends Error {
 // extracting each one. Confirm with the client whether this bundled format
 // is typical before building that out, since it changes the intake design.
 
+// Thrown when the bytes we're about to send don't look like a PDF at all --
+// catches a corrupt/mismatched upload before wasting an API call, and gives
+// a much clearer error than "messages.0.content.0.pdf.source.base64.data:
+// The PDF specified was not valid" from the Claude API.
+export class InvalidPdfError extends Error {
+  constructor(signature: string) {
+    super(`Uploaded file does not look like a PDF -- expected bytes to start with "%PDF", got: ${JSON.stringify(signature)}`);
+    this.name = "InvalidPdfError";
+  }
+}
+
 export async function extractInvoice(pdfBuffer: Buffer): Promise<ExtractedInvoice> {
+  const base64Data = pdfBuffer.toString("base64");
+
+  // Sanity check: decode the base64 right back and confirm the standard PDF
+  // file signature is intact before spending an API call on it. This is the
+  // fastest way to tell "we sent Claude garbage" apart from "the PDF itself
+  // is malformed" when debugging a "PDF specified was not valid" error.
+  const decodedHead = Buffer.from(base64Data, "base64").subarray(0, 5);
+  const signature = decodedHead.toString("latin1");
+  console.log(`extractInvoice: pdfBuffer=${pdfBuffer.length} bytes, base64=${base64Data.length} chars, decoded signature=${JSON.stringify(signature)}`);
+  if (!signature.startsWith("%PDF")) {
+    throw new InvalidPdfError(signature);
+  }
+
   const client = new Anthropic();
 
   const response = await client.messages.create({
@@ -143,7 +167,7 @@ export async function extractInvoice(pdfBuffer: Buffer): Promise<ExtractedInvoic
             source: {
               type: "base64",
               media_type: "application/pdf",
-              data: pdfBuffer.toString("base64"),
+              data: base64Data,
             },
           },
           { type: "text", text: EXTRACTION_PROMPT },

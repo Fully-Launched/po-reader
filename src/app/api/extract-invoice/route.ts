@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { extractInvoice, ExtractionTruncatedError } from "@/lib/extraction";
+import { extractInvoice, ExtractionTruncatedError, InvalidPdfError } from "@/lib/extraction";
 
 // Raises this function's execution limit above Vercel's default (10s on
 // Hobby). 60s covers large multi-page/line-item invoices without hitting
@@ -35,6 +35,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "This invoice is too large to process automatically. Please contact support." },
         { status: 422 },
+      );
+    }
+    if (err instanceof InvalidPdfError) {
+      console.error("Invalid PDF upload:", err);
+      return NextResponse.json(
+        { error: "The uploaded file doesn't look like a valid PDF. Please check the file and try again." },
+        { status: 400 },
       );
     }
     console.error("Invoice extraction failed:", err);
