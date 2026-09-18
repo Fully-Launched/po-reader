@@ -14,7 +14,15 @@ import type { ExtractedInvoice } from "../types";
 export interface BuildPoPayloadArgs {
   invoice: ExtractedInvoice;
   vendorId: number;
-  jobId: number;
+  /**
+   * ServiceTitan job ID, if one was resolved. Most of these invoices are
+   * general inventory/bulk restock purchases that aren't tied to a specific
+   * job -- see CLAUDE.md open questions (pending final confirmation from the
+   * client on whether any of their invoices ARE job-tied). Attach it
+   * best-effort when a project number was extracted and a matching job was
+   * found; omit it otherwise rather than blocking PO creation on it.
+   */
+  jobId?: number;
   businessUnitId: number;
   /**
    * ID of a PO Type with "Automatically Receive" enabled (e.g. "Supply House
@@ -42,7 +50,9 @@ export function buildPoPayload({
 
   return {
     vendorId,
-    jobId,
+    // Omitted entirely (not sent as null/undefined) when no job was resolved
+    // -- most of these are bulk/inventory purchases with no job to attach.
+    ...(jobId !== undefined ? { jobId } : {}),
     businessUnitId,
     typeId: poTypeId,
     date: invoice.invoiceDate,
@@ -71,7 +81,7 @@ export function reviewWarnings(invoice: ExtractedInvoice): string[] {
     warnings.push("vendor name not confidently matched");
   }
   if (!invoice.projectNumber?.trim()) {
-    warnings.push("no project number found");
+    warnings.push("no project number found -- expected for bulk/inventory purchases not tied to a job, but worth a glance if this one should be job-tied");
   }
   if (invoice.lineItems.length === 0) {
     warnings.push("no line items extracted");
@@ -99,10 +109,14 @@ export function isNotAnInvoice(invoice: ExtractedInvoice): boolean {
  * extraction or by manual correction in the review table. Confidence and
  * "was this auto-extracted vs. hand-typed" are irrelevant here -- only
  * whether the data needed to create a ServiceTitan PO is present.
+ *
+ * Project number is deliberately NOT required: most of these invoices are
+ * general inventory/bulk restock purchases that aren't tied to a specific
+ * job (see CLAUDE.md open questions). Job attachment in /api/create-po is
+ * best-effort when a project number IS present, never a submission blocker.
  */
 export function hasRequiredFields(invoice: ExtractedInvoice): boolean {
   if (!invoice.vendorName.trim()) return false;
-  if (!invoice.projectNumber?.trim()) return false;
   if (invoice.lineItems.length === 0) return false;
   if (invoice.lineItems.some((item) => !item.description.trim() || item.quantity <= 0)) return false;
   return true;

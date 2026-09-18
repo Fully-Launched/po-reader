@@ -23,14 +23,20 @@ Call the extract_invoice tool with the data. Extract every line item -- invoices
 30+ line items; do not summarize or omit any.
 
 Field notes:
-- project_number: the job/project number referenced on the invoice, if any. NOT always a
-  clearly-labeled field. Some vendors (e.g. Arco Supply) embed it in a footer line like
-  "Cost to Location: J700.15" rather than a dedicated field -- look at header codes
-  (JOB#, ID#, YOUR#) AND footer/memo lines, not just fields explicitly labeled "project" or "job".
+- project_number: the job/project number referenced on the invoice, if any. Many of these
+  invoices are general inventory/bulk restock purchases with NO project number at all --
+  that is expected and normal, not a sign of a bad extraction. When one IS present, it's
+  not always a clearly-labeled field: some vendors (e.g. Arco Supply) embed it in a footer
+  line like "Cost to Location: J700.15" rather than a dedicated field -- look at header
+  codes (JOB#, ID#, YOUR#) AND footer/memo lines, not just fields explicitly labeled
+  "project" or "job".
 - If a field is illegible or missing on a genuine invoice, use null (or "" for line item
   description) rather than guessing.
-- Set extraction_confidence to "low" if the project number or any line item amount is
-  unclear -- this signals the tool to flag the invoice for human review before submission.`;
+- Set extraction_confidence to "low" if any line item amount is unclear, or if the
+  invoice clearly references a job/project but you can't pin down the number -- this
+  signals the tool to flag the invoice for human review before submission. A simply
+  ABSENT project number on an otherwise-clear invoice should NOT by itself lower
+  confidence.`;
 
 // strict: true guarantees tool_use.input validates exactly against this schema on
 // success (see claude-api skill -- Strict tool use). additionalProperties: false +

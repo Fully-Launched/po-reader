@@ -105,10 +105,10 @@ export function ReviewTable({ invoice, onConfirm, onCancel }: ReviewTableProps) 
       </label>
 
       <label>
-        Project / job number
+        Project / job number (optional -- leave blank for bulk/inventory purchases)
         <input
           type="text"
-          placeholder="Required to resolve a ServiceTitan job"
+          placeholder="Only if this purchase is tied to a specific job"
           value={draft.projectNumber ?? ""}
           onChange={(e) => updateField("projectNumber", e.target.value.trim() === "" ? null : e.target.value)}
         />

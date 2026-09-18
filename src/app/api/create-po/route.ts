@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
   // until these are filled in, but never trust the client alone.
   if (!hasRequiredFields(invoice)) {
     return NextResponse.json(
-      { error: "Missing required fields: vendor name, project number, and at least one valid line item are required." },
+      { error: "Missing required fields: vendor name and at least one valid line item are required." },
       { status: 422 },
     );
   }
@@ -72,30 +72,26 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (!invoice.projectNumber) {
-    return NextResponse.json(
-      { error: "Invoice has no project number -- cannot resolve a ServiceTitan job" },
-      { status: 422 },
-    );
-  }
-
-  // findJobByProjectNumber is not implemented yet (see CLAUDE.md open
-  // questions -- needs JPM API research), so this will currently always
-  // reject with a 501 rather than silently proceeding with a wrong job.
-  let job;
-  try {
-    job = await client.findJobByProjectNumber(invoice.projectNumber);
-  } catch {
-    return NextResponse.json(
-      { error: "Job lookup by project number is not implemented yet -- see CLAUDE.md open questions" },
-      { status: 501 },
-    );
-  }
-  if (!job) {
-    return NextResponse.json(
-      { error: `No ServiceTitan job found for project number "${invoice.projectNumber}"` },
-      { status: 422 },
-    );
+  // Job attachment is best-effort, not required: these invoices are general
+  // inventory/bulk restock purchases, not tied to specific jobs (pending
+  // final confirmation from the client on whether any of their invoices ARE
+  // job-tied -- see CLAUDE.md open questions). If a project number was
+  // extracted, try to resolve a matching job and attach it; if there's no
+  // project number, no match, or the lookup isn't implemented yet
+  // (findJobByProjectNumber currently always throws -- see CLAUDE.md), just
+  // proceed without a job rather than blocking PO creation on it.
+  let jobId: number | undefined;
+  if (invoice.projectNumber) {
+    try {
+      const job = await client.findJobByProjectNumber(invoice.projectNumber);
+      if (job) {
+        jobId = job.id;
+      } else {
+        console.warn(`No ServiceTitan job found for project number "${invoice.projectNumber}" -- proceeding without a job`);
+      }
+    } catch (err) {
+      console.warn(`Job lookup by project number failed or is not implemented -- proceeding without a job:`, err);
+    }
   }
 
   const poTypeId = await client.getPoTypeIdByName(AUTO_RECEIVE_PO_TYPE_NAME);
@@ -109,7 +105,7 @@ export async function POST(req: NextRequest) {
   const payload = buildPoPayload({
     invoice,
     vendorId: vendor.id,
-    jobId: job.id,
+    jobId,
     businessUnitId,
     poTypeId,
   });
