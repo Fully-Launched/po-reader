@@ -40,6 +40,12 @@ interface PricebookMaterial {
   [key: string]: unknown;
 }
 
+interface InventoryLocation {
+  id: number;
+  name: string;
+  [key: string]: unknown;
+}
+
 export class ServiceTitanClient {
   private environment: string;
   private tenantId: string;
@@ -223,6 +229,28 @@ export class ServiceTitanClient {
     const body = await resp.json();
     const results: PricebookMaterial[] = body.data ?? [];
     return results[0]?.id ?? null;
+  }
+
+  /**
+   * List Inventory Locations for this tenant -- backs the review table's
+   * Inventory Location dropdown via GET /api/inventory-locations.
+   * PurchaseOrders_Create requires inventoryLocationId as a top-level
+   * field (confirmed via a live 400 once item-level validation started
+   * passing). Endpoint (unverified against live docs, but plausible given
+   * the Inventory API's module structure, following the same
+   * /inventory/v2/tenant/{tenant}/... pattern as the other Inventory API
+   * calls in this file): GET /inventory/v2/tenant/{tenant}/inventory-locations.
+   * Same single-page-only caveat as listBusinessUnits().
+   */
+  async listInventoryLocations(): Promise<InventoryLocation[]> {
+    const url = new URL(`${API_BASES[this.environment]}/inventory/v2/tenant/${this.tenantId}/inventory-locations`);
+    url.searchParams.set("pageSize", "200");
+    const resp = await fetch(url, { headers: await this.headers() });
+    if (!resp.ok) {
+      throw new Error(`listInventoryLocations failed: ${resp.status} ${await resp.text()}`);
+    }
+    const body = await resp.json();
+    return body.data ?? [];
   }
 
   /**

@@ -14,10 +14,11 @@ const AUTO_RECEIVE_PO_TYPE_NAME =
 
 interface CreatePoRequestBody {
   invoice: ExtractedInvoice;
-  // No lookup exists yet for which ServiceTitan business unit a PO should be
-  // assigned to (see CLAUDE.md open questions) -- the frontend must supply
-  // it until that's built.
   businessUnitId: number;
+  // Resolved via the review table's Inventory Location dropdown
+  // (GET /api/inventory-locations) -- REQUIRED top-level field on
+  // PurchaseOrders_Create, confirmed via a live 400.
+  inventoryLocationId: number;
 }
 
 // POST /api/create-po
@@ -32,11 +33,11 @@ interface CreatePoRequestBody {
 // created with a PO Type that has "Automatically Receive" enabled.
 export async function POST(req: NextRequest) {
   const body: CreatePoRequestBody = await req.json();
-  const { invoice, businessUnitId } = body;
+  const { invoice, businessUnitId, inventoryLocationId } = body;
 
-  if (!invoice || typeof businessUnitId !== "number") {
+  if (!invoice || typeof businessUnitId !== "number" || typeof inventoryLocationId !== "number") {
     return NextResponse.json(
-      { error: "Request body must include 'invoice' and 'businessUnitId'" },
+      { error: "Request body must include 'invoice', 'businessUnitId', and 'inventoryLocationId'" },
       { status: 400 },
     );
   }
@@ -133,6 +134,7 @@ export async function POST(req: NextRequest) {
     vendorId: vendor.id,
     jobId,
     businessUnitId,
+    inventoryLocationId,
     poTypeId,
     lineItemSkuIds,
   });

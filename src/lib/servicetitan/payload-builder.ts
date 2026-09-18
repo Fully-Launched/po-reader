@@ -2,20 +2,49 @@
 // PurchaseOrders_Create endpoint expects.
 //
 // Ported from the comfort-x-design-invoice-tool prototype's
-// servicetitan/payload_builder.py, then corrected against a live 400 from
-// PurchaseOrders_Create: the prototype's field names (skuName/price) were
-// wrong, and each item also requires a real skuId referencing an existing
-// ServiceTitan Pricebook item -- see ServiceTitanClient.findMaterialSkuIdByDescription()
-// and the "Line-item -> pricebook matching" open question in CLAUDE.md.
+// servicetitan/payload_builder.py, then corrected TWICE against live 400s
+// from PurchaseOrders_Create:
+//   1. Item-level: the prototype's field names (skuName/price) were wrong,
+//      and each item also requires a real skuId referencing an existing
+//      ServiceTitan Pricebook item -- see
+//      ServiceTitanClient.findMaterialSkuIdByDescription() and the
+//      "Line-item -> pricebook matching" open question in CLAUDE.md.
+//   2. Top-level: once item-level validation passed, a second 400 surfaced
+//      shipTo, shipping, requiredOn, inventoryLocationId, and
+//      impactsTechnicianPayroll as missing required top-level fields (plus
+//      a generic "request" error -- see the note on SANDBOX_PLACEHOLDER_ADDRESS
+//      below and CLAUDE.md for why that's almost certainly duplicate noise
+//      tied to these same missing fields, not a wrapper-object mismatch).
 //
-// NOTE: field names below are modeled on the publicly documented Inventory
-// API shape plus that live 400's error detail. Verify against the live API
-// reference before this goes to production (e.g. whether "total" is also
-// accepted/needed per item -- currently omitted since it wasn't in the
-// live error's list of required item properties and is presumably derived
-// server-side from cost * quantity).
+// NOTE: field names/shapes below are modeled on the publicly documented
+// Inventory API shape plus those live 400s' error detail -- NOT verified
+// against a full live schema (developer.servicetitan.io's API reference is
+// a JS-rendered page that couldn't be fetched for this fix). Verify against
+// the live API reference before this goes to production.
 
 import type { ExtractedInvoice } from "../types";
+
+/**
+ * SANDBOX PLACEHOLDER ADDRESS -- NOT CONFIRMED AS COMFORT X DESIGN'S REAL
+ * SHIPPING/RECEIVING ADDRESS. Pulled from ad-hoc test invoice data purely to
+ * get sandbox PurchaseOrders_Create calls past validation while the real
+ * shipTo/shipping schema and the client's actual address are unconfirmed.
+ * MUST be replaced with the client-provided address (or a real address
+ * lookup) before any production use -- see CLAUDE.md open questions.
+ *
+ * Shape is a best-effort guess (street/city/state/zip/country, matching the
+ * address shape ServiceTitan uses elsewhere in their API, e.g. Customer/Job
+ * locations) -- NOT verified against PurchaseOrders_Create's actual schema.
+ */
+const SANDBOX_PLACEHOLDER_ADDRESS = {
+  name: "Comfort X Design, Inc.",
+  street: "510 S Spring Road",
+  unit: null,
+  city: "Elmhurst",
+  state: "IL",
+  zip: "60126",
+  country: "USA",
+};
 
 export interface BuildPoPayloadArgs {
   invoice: ExtractedInvoice;
@@ -30,6 +59,14 @@ export interface BuildPoPayloadArgs {
    */
   jobId?: number;
   businessUnitId: number;
+  /**
+   * ServiceTitan Inventory Location ID -- REQUIRED top-level field (confirmed
+   * via a live 400 once item-level validation passed). Resolved from the
+   * review table's Inventory Location dropdown (GET /api/inventory-locations
+   * -> ServiceTitanClient.listInventoryLocations()), same pattern as
+   * businessUnitId.
+   */
+  inventoryLocationId: number;
   /**
    * ID of a PO Type with "Automatically Receive" enabled (e.g. "Supply House
    * Run" in the sandbox) -- REQUIRED. This is the only way status becomes
@@ -56,6 +93,7 @@ export function buildPoPayload({
   vendorId,
   jobId,
   businessUnitId,
+  inventoryLocationId,
   poTypeId,
   lineItemSkuIds,
 }: BuildPoPayloadArgs): Record<string, unknown> {
@@ -79,6 +117,7 @@ export function buildPoPayload({
     // -- most of these are bulk/inventory purchases with no job to attach.
     ...(jobId !== undefined ? { jobId } : {}),
     businessUnitId,
+    inventoryLocationId,
     typeId: poTypeId,
     date: invoice.invoiceDate,
     memo: `Auto-created from vendor invoice #${invoice.invoiceNumber || "unknown"}`,
@@ -86,6 +125,24 @@ export function buildPoPayload({
     tax: invoice.taxAmount,
     // No "status" field -- status can't be set here. It's determined entirely
     // by whether poTypeId refers to an Automatically-Receive-enabled PO Type.
+
+    // --- Fields added for the second live 400 (see file header) ---
+
+    // These invoices are general inventory/bulk restock purchases with no
+    // job or technician attached (see "Job attachment is optional" in
+    // CLAUDE.md) -- there's no payroll to impact.
+    impactsTechnicianPayroll: false,
+    // Not yet user-facing (see CLAUDE.md open questions) -- defaults to
+    // today, just to give ServiceTitan a valid date. Revisit if
+    // ServiceTitan expects something more specific (e.g. vendor's quoted
+    // lead time) once this is exposed in the UI.
+    requiredOn: new Date().toISOString().slice(0, 10),
+    // SANDBOX PLACEHOLDER -- see SANDBOX_PLACEHOLDER_ADDRESS above. Using the
+    // same object for both shipTo and shipping since it's unconfirmed
+    // whether they're meant to hold the same or different data (address vs.
+    // e.g. a shipping method) -- verify against the live schema.
+    shipTo: SANDBOX_PLACEHOLDER_ADDRESS,
+    shipping: SANDBOX_PLACEHOLDER_ADDRESS,
   };
 }
 
