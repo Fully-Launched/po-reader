@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ExtractedInvoice, InvoiceLineItem } from "@/lib/types";
 import { reviewWarnings, hasRequiredFields, isNotAnInvoice } from "@/lib/servicetitan/payload-builder";
 
@@ -8,6 +8,11 @@ interface ReviewTableProps {
   invoice: ExtractedInvoice;
   onConfirm: (invoice: ExtractedInvoice, businessUnitId: number) => void;
   onCancel: () => void;
+}
+
+interface BusinessUnit {
+  id: number;
+  name: string;
 }
 
 const EMPTY_LINE_ITEM: InvoiceLineItem = { description: "", quantity: 1, unitPrice: 0, total: 0 };
@@ -25,11 +30,40 @@ const EMPTY_LINE_ITEM: InvoiceLineItem = { description: "", quantity: 1, unitPri
 // memo) -- there's no partial data worth editing, so that case still hard
 // blocks below.
 //
-// businessUnitId is collected here (rather than looked up) because no
-// business-unit resolution logic exists yet -- see CLAUDE.md open questions.
+// Business Unit is picked from a dropdown populated by /api/business-units
+// (a GET to ServiceTitan's Business Units endpoint) -- the user never sees
+// or types a raw ID. Fetched on mount, before the isNotAnInvoice early
+// return below, since hooks must run unconditionally on every render.
 export function ReviewTable({ invoice, onConfirm, onCancel }: ReviewTableProps) {
   const [draft, setDraft] = useState<ExtractedInvoice>(invoice);
   const [businessUnitId, setBusinessUnitId] = useState("");
+  const [businessUnits, setBusinessUnits] = useState<BusinessUnit[] | null>(null);
+  const [businessUnitsError, setBusinessUnitsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/business-units")
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `Failed (${res.status})`);
+        return res.json() as Promise<BusinessUnit[]>;
+      })
+      .then((units) => {
+        if (cancelled) return;
+        setBusinessUnits(units);
+        // Only one option -- pre-select it so the user doesn't have to act,
+        // but it still renders in the dropdown rather than being hidden.
+        if (units.length === 1) {
+          setBusinessUnitId(String(units[0].id));
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setBusinessUnitsError(err instanceof Error ? err.message : "Failed to load business units");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (isNotAnInvoice(draft)) {
     return (
@@ -211,12 +245,27 @@ export function ReviewTable({ invoice, onConfirm, onCancel }: ReviewTableProps) 
       </p>
 
       <label>
-        ServiceTitan Business Unit ID
-        <input
-          type="number"
-          value={businessUnitId}
-          onChange={(e) => setBusinessUnitId(e.target.value)}
-        />
+        Business Unit
+        {businessUnitsError ? (
+          <p role="alert">Couldn&apos;t load business units: {businessUnitsError}</p>
+        ) : businessUnits === null ? (
+          <p>Loading business units...</p>
+        ) : businessUnits.length === 0 ? (
+          <p role="alert">No business units found for this tenant.</p>
+        ) : (
+          <select value={businessUnitId} onChange={(e) => setBusinessUnitId(e.target.value)}>
+            {businessUnits.length > 1 && (
+              <option value="" disabled>
+                Select a business unit
+              </option>
+            )}
+            {businessUnits.map((bu) => (
+              <option key={bu.id} value={bu.id}>
+                {bu.name}
+              </option>
+            ))}
+          </select>
+        )}
       </label>
 
       <button

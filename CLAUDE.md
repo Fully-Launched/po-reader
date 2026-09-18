@@ -49,12 +49,15 @@ This logic was ported from an earlier Python prototype (`comfort-x-design-invoic
 - **`/api/create-po`**
   Takes the human-reviewed `ExtractedInvoice` (plus a `businessUnitId` — see below), resolves the ServiceTitan vendor (`findVendorByName` — required), best-effort resolves a job via `findJobByProjectNumber` when a project number is present (never blocks — see Job attachment above), resolves the auto-receive PO Type ID, builds the payload, and calls `PurchaseOrders_Create`. Re-runs `isNotAnInvoice` and `hasRequiredFields` server-side as defense in depth even though the frontend should already gate on the same checks — does NOT re-check confidence, since low confidence is not a submission blocker (see Flow above).
 
-  **`businessUnitId` is currently supplied by the user in the review table**, not looked up — no business-unit resolution logic has been built yet (see Open Questions).
+  **`businessUnitId` comes from the review table's Business Unit dropdown** (see Frontend below), populated via `GET /api/business-units`.
+
+- **`/api/business-units`**
+  `GET` — calls `ServiceTitanClient.listBusinessUnits()` and returns `[{ id, name }, ...]`. Backs the review table's Business Unit dropdown; the user picks a name, never types or sees a raw ID. Supersedes an earlier temporary `/api/dev/business-units` scratch route (now deleted) that was sandbox-only — this one is permanent and has no environment restriction, since Business Unit selection is needed in every environment.
 
 ### Frontend
 
 - **Upload screen** (`src/components/InvoiceUploader.tsx`) — file picker for the vendor invoice PDF (drag-and-drop is a TODO), drives the upload → extract → review → submit state machine, kicks off `/api/extract-invoice`.
-- **Review table** (`src/components/ReviewTable.tsx`) — shown between extraction and submission. This is the human-in-the-loop checkpoint: nothing is written to ServiceTitan until the user confirms/corrects the extracted data and supplies a Business Unit ID. Surfaces the `needsHumanReview` flag as a visible warning. Submission calls `/api/create-po`.
+- **Review table** (`src/components/ReviewTable.tsx`) — shown between extraction and submission. This is the human-in-the-loop checkpoint: nothing is written to ServiceTitan until the user confirms/corrects the extracted data and picks a Business Unit from the dropdown (fetched from `/api/business-units` on mount; if only one Business Unit exists, it's pre-selected automatically but still shown, not hidden). Surfaces the `needsHumanReview` flag as a visible warning. Submission calls `/api/create-po`.
 
 The review table is a deliberate design choice, not a placeholder to be removed later — Claude's extraction is not assumed to be perfect, and PO creation (which, per the correction above, auto-receives and can auto-bill) is not something we want to auto-fire on unverified data.
 
@@ -80,7 +83,7 @@ The review table is a deliberate design choice, not a placeholder to be removed 
 - [x] **Tax handling** — CONFIRMED invoice-level (not per-line-item), based on a real Arco sample. `buildPoPayload()` puts tax on the PO, not per line item.
 - [ ] **Vendor ID lookup** — `findVendorByName()` hits a plausible `GET /inventory/v2/tenant/{tenant}/vendors?name=` endpoint — unverified against the live API reference, confirm exact path/query param once developer access is available.
 - [ ] **Job/project ID lookup** — `findJobByProjectNumber()` is not implemented. Will likely call the JPM API's Projects or Jobs list endpoint and match on a project number field; exact field name needs confirming against Comfort x Design's real data. **No longer blocks `/api/create-po`** — job attachment is best-effort/optional (these are mostly bulk/inventory purchases, not job-tied), so this is worth implementing for the minority of invoices that ARE job-tied, but not a launch blocker. Still pending final client confirmation on whether any of their invoices are actually job-tied at all.
-- [ ] **Business Unit ID** — no lookup logic exists at all. Currently collected as a manual input in the review table. Decide whether this needs to be resolved automatically (e.g. always one fixed BU) or should stay a manual field. `GET /api/dev/business-units` is a **temporary, sandbox-only scratch route** (see `src/app/api/dev/business-units/route.ts`) for pulling the real Business Unit IDs/names out of the sandbox tenant while this is being decided -- delete it once it's served its purpose; it has no auth beyond refusing to run against production.
+- [x] **Business Unit ID** — resolved via a dropdown (`GET /api/business-units` → `ServiceTitanClient.listBusinessUnits()`) in the review table; the user picks a name, never a raw ID. Still worth revisiting once production access exists: the underlying `/settings/v2/tenant/{tenant}/business-units` endpoint is unverified against live docs (see `listBusinessUnits()` in `src/lib/servicetitan/client.ts`), and it's not yet confirmed whether Comfort x Design uses one Business Unit or several.
 - [ ] **Batch invoice delivery** — Arco's real sample arrived as **one PDF containing 18 separate invoices** (a monthly statement), not one PDF per order. Need to confirm with the client whether this is the typical delivery format — if so, `extractInvoice()` needs a batch-aware sibling (see TODO in `src/lib/extraction.ts`) that asks Claude to split the document into constituent invoices before extracting each one. This changes the intake design, so confirm before building it.
 - [ ] Confirm the exact PO Type name with "Automatically Receive" enabled in the **production** tenant — the sandbox uses `"Supply House Run"`, but production may name it differently. Configurable via `SERVICETITAN_AUTO_RECEIVE_PO_TYPE_NAME` (see Environment Variables).
 
@@ -115,7 +118,7 @@ All of the following must be set as **Vercel environment variables** — never c
 - [ ] Vendor ID lookup verified against live sandbox API
 - [ ] Job/project ID lookup implemented and verified (best-effort, not a launch blocker)
 - [ ] Line-item → pricebook matching decision made
-- [ ] Business unit resolution decided (manual vs. automatic)
+- [x] Business unit resolution decided (dropdown via `/api/business-units`, not manual entry) — still needs `listBusinessUnits()`'s endpoint verified against live sandbox API
 - [ ] Batch invoice delivery format confirmed with client (affects whether batch-splitting extraction logic is needed)
 - [ ] Client production credentials received (production Client ID/Secret/App Key/Tenant ID)
 - [ ] Production PO Type name (with Automatically Receive) confirmed
