@@ -1,0 +1,25 @@
+{
+  "vendor_name": "Acme HVAC Supply Co.",
+  "invoice_number": "INV-88213",
+  "invoice_date": "2026-08-15",
+  "project_number": "CXD-4471",
+  "line_items": [
+    {
+      "description": "2-ton condenser unit",
+      "quantity": 1,
+      "unit_price": 1450.00,
+      "total": 1450.00
+    },
+    {
+      "description": "Copper line set 25ft",
+      "quantity": 2,
+      "unit_price": 85.50,
+      "total": 171.00
+    }
+  ],
+  "tax_amount": 97.28,
+  "subtotal": 1621.00,
+  "total": 1718.28,
+  "extraction_confidence": "high",
+  "notes": ""
+}

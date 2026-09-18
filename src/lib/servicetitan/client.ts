@@ -1,0 +1,182 @@
+// Minimal ServiceTitan API client: auth + the calls this tool needs.
+//
+// Ported from the comfort-x-design-invoice-tool prototype's
+// servicetitan/client.py. Verify every endpoint path/schema against
+// developer.servicetitan.io before going live -- several of these are
+// written from the publicly documented shape of the Inventory API, not from
+// a live-tested account (flagged per-method below).
+
+const AUTH_URLS: Record<string, string> = {
+  integration: "https://auth-integration.servicetitan.io/connect/token",
+  production: "https://auth.servicetitan.io/connect/token",
+};
+
+const API_BASES: Record<string, string> = {
+  integration: "https://api-integration.servicetitan.io",
+  production: "https://api.servicetitan.io",
+};
+
+interface PoType {
+  id: number;
+  name: string;
+}
+
+interface Vendor {
+  id: number;
+  name: string;
+  [key: string]: unknown;
+}
+
+export class ServiceTitanClient {
+  private environment: string;
+  private tenantId: string;
+  private clientId: string;
+  private clientSecret: string;
+  private appKey: string;
+
+  private token: string | null = null;
+  private tokenExpiresAt = 0;
+
+  constructor() {
+    this.environment = process.env.SERVICETITAN_ENVIRONMENT ?? "integration";
+    this.tenantId = requireEnv("SERVICETITAN_TENANT_ID");
+    this.clientId = requireEnv("SERVICETITAN_CLIENT_ID");
+    this.clientSecret = requireEnv("SERVICETITAN_CLIENT_SECRET");
+    this.appKey = requireEnv("SERVICETITAN_APP_KEY");
+  }
+
+  /** Fetch (and cache) an OAuth 2.0 client-credentials access token. */
+  private async getAccessToken(): Promise<string> {
+    if (this.token && Date.now() < this.tokenExpiresAt) {
+      return this.token;
+    }
+
+    const resp = await fetch(AUTH_URLS[this.environment], {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+      }),
+    });
+    if (!resp.ok) {
+      throw new Error(`ServiceTitan auth failed: ${resp.status} ${await resp.text()}`);
+    }
+    const payload = await resp.json();
+
+    this.token = payload.access_token;
+    // Refresh a little early to avoid edge-of-expiry failures
+    this.tokenExpiresAt = Date.now() + ((payload.expires_in ?? 900) - 60) * 1000;
+    return this.token as string;
+  }
+
+  private async headers(): Promise<HeadersInit> {
+    return {
+      Authorization: `Bearer ${await this.getAccessToken()}`,
+      "ST-App-Key": this.appKey,
+      "Content-Type": "application/json",
+    };
+  }
+
+  /**
+   * Create a Purchase Order via the Inventory API.
+   * Docs: https://developer.servicetitan.io/api-details/#api=tenant-inventory-v2&operation=PurchaseOrders_Create
+   */
+  async createPurchaseOrder(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const url = `${API_BASES[this.environment]}/inventory/v2/tenant/${this.tenantId}/purchase-orders`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: await this.headers(),
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) {
+      throw new Error(`PurchaseOrders_Create failed: ${resp.status} ${await resp.text()}`);
+    }
+    return resp.json();
+  }
+
+  /**
+   * DO NOT USE FOR STATUS CHANGES. CONFIRMED via ServiceTitan's own developer
+   * docs (Inventory API resource page): "A purchase order status cannot be
+   * updated through API." There is no receive/status-change endpoint -- this
+   * was fully resolved, not just suspected. The ONLY way to get a PO
+   * auto-received via the API is to create it using a PO Type with
+   * "Automatically Receive" enabled (see getPoTypeIdByName below) -- the
+   * status is set automatically at creation time, not updated afterward.
+   * This method is kept only for non-status fields that may be genuinely
+   * editable (e.g. memo) -- verify against the live reference before relying
+   * on it for anything.
+   */
+  async updatePurchaseOrder(
+    poId: number,
+    updates: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const url = `${API_BASES[this.environment]}/inventory/v2/tenant/${this.tenantId}/purchase-orders/${poId}`;
+    const resp = await fetch(url, {
+      method: "PATCH",
+      headers: await this.headers(),
+      body: JSON.stringify(updates),
+    });
+    if (!resp.ok) {
+      throw new Error(`updatePurchaseOrder failed: ${resp.status} ${await resp.text()}`);
+    }
+    return resp.json();
+  }
+
+  /**
+   * Look up a Purchase Order Type's ID by name (e.g. "Supply House Run",
+   * which has Automatically Receive enabled in the sandbox). Confirm exact
+   * endpoint path against the live API reference -- plausible path based on
+   * Inventory API module structure, not live-verified.
+   */
+  async getPoTypeIdByName(typeName: string): Promise<number | null> {
+    const url = `${API_BASES[this.environment]}/inventory/v2/tenant/${this.tenantId}/purchase-order-types`;
+    const resp = await fetch(url, { headers: await this.headers() });
+    if (!resp.ok) {
+      throw new Error(`getPoTypeIdByName failed: ${resp.status} ${await resp.text()}`);
+    }
+    const body = await resp.json();
+    const match = (body.data ?? []).find(
+      (poType: PoType) => poType.name?.toLowerCase() === typeName.toLowerCase(),
+    );
+    return match?.id ?? null;
+  }
+
+  /**
+   * Look up a ServiceTitan VendorId by name.
+   * Endpoint (unverified against live docs, but plausible given API module
+   * structure): GET /inventory/v2/tenant/{tenant}/vendors, filtered by name.
+   * Confirm exact query param name (e.g. ?name=) once developer access is available.
+   */
+  async findVendorByName(vendorName: string): Promise<Vendor | null> {
+    const url = new URL(`${API_BASES[this.environment]}/inventory/v2/tenant/${this.tenantId}/vendors`);
+    url.searchParams.set("name", vendorName);
+    const resp = await fetch(url, { headers: await this.headers() });
+    if (!resp.ok) {
+      throw new Error(`findVendorByName failed: ${resp.status} ${await resp.text()}`);
+    }
+    const body = await resp.json();
+    const results: Vendor[] = body.data ?? [];
+    return results[0] ?? null;
+  }
+
+  /**
+   * TODO: implement once we've confirmed how project numbers map to
+   * ServiceTitan job/project IDs. Will likely call the JPM API's Projects or
+   * Jobs list endpoint and match on a project number field -- exact field
+   * name needs confirming against the client's real data once sample
+   * invoices/tenant access are available.
+   */
+  async findJobByProjectNumber(_projectNumber: string): Promise<{ id: number } | null> {
+    throw new Error("Not implemented -- needs JPM API research, see CLAUDE.md open questions");
+  }
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}

@@ -1,0 +1,19 @@
+{
+  "_note": "Manually derived from a real Arco Supply invoice (client-provided sample, INV #23538) as a ground-truth test fixture -- use to validate live Claude extraction once ANTHROPIC_API_KEY is available.",
+  "vendor_name": "Arco Supply Co",
+  "invoice_number": "23538",
+  "invoice_date": "2026-08-31",
+  "project_number": "700.15",
+  "line_items": [
+    {"description": "GALV ELBOW 6\" - 30GA", "quantity": 12, "unit_price": 2.56, "total": 30.72},
+    {"description": "PIPE: 6\"X FIVE FOOT WA", "quantity": 20, "unit_price": 8.17, "total": 163.40},
+    {"description": "6 ON 8-12\" SADDLE TEE", "quantity": 1, "unit_price": 3.74, "total": 3.74},
+    {"description": "6\" SPIN COLLAR 2.5\"Lg.LE", "quantity": 3, "unit_price": 2.34, "total": 7.02},
+    {"description": "ARCOFLEX 6\"X25'SLVR JKT R", "quantity": 2, "unit_price": 60.91, "total": 121.82}
+  ],
+  "tax_amount": 25.32,
+  "subtotal": 326.70,
+  "total": 352.02,
+  "extraction_confidence": "high",
+  "notes": "Project number pulled from footer line 'Cost to Location: J700.15', not a labeled 'project number' field -- Arco's own JOB#/ID# header fields (JOB# 15, ID# 700) combine to form this same value. Vendor part numbers (e.g. 301/D) do not correspond to any known ServiceTitan pricebook SKU -- flagged for mapping decision."
+}

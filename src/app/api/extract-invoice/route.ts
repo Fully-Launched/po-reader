@@ -1,20 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
+import { extractInvoice } from "@/lib/extraction";
 
 // POST /api/extract-invoice
-// Accepts a vendor invoice PDF upload (multipart/form-data), sends it to the
-// Claude API with a defined JSON schema for vendor name + line items
-// (description, quantity, unit cost, total), and returns the structured
-// extraction result (an ExtractedInvoice, see src/lib/types.ts) for the
-// frontend review table.
+// Accepts a vendor invoice PDF upload (multipart/form-data, field "file"),
+// sends it to the Claude API, and returns the structured ExtractedInvoice
+// for the frontend review table.
 export async function POST(req: NextRequest) {
-  // TODO: parse the multipart/form-data request and pull out the uploaded PDF file
-  // TODO: send the PDF to the Claude API (ANTHROPIC_API_KEY) using a defined JSON
-  //       schema / tool-use definition for { vendorName, lineItems[] }
-  // TODO: validate the Claude response against that schema before returning it
-  // TODO: return the ExtractedInvoice JSON to the frontend for the review table
+  const formData = await req.formData();
+  const file = formData.get("file");
 
-  return NextResponse.json<{ error: string }>(
-    { error: "Not implemented" },
-    { status: 501 },
-  );
+  if (!(file instanceof File)) {
+    return NextResponse.json({ error: "Missing 'file' in form data" }, { status: 400 });
+  }
+  if (file.type !== "application/pdf") {
+    return NextResponse.json({ error: "File must be a PDF" }, { status: 400 });
+  }
+
+  const pdfBuffer = Buffer.from(await file.arrayBuffer());
+
+  try {
+    const extracted = await extractInvoice(pdfBuffer);
+    return NextResponse.json(extracted);
+  } catch (err) {
+    console.error("Invoice extraction failed:", err);
+    return NextResponse.json({ error: "Extraction failed" }, { status: 502 });
+  }
 }
