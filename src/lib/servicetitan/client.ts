@@ -16,6 +16,28 @@ const API_BASES: Record<string, string> = {
   production: "https://api.servicetitan.io",
 };
 
+// Base domain for ServiceTitan's own WEB APP (not the API) -- used only for
+// building a human-facing deep link to a created PO, see
+// buildPurchaseOrderViewUrl() below. Distinct domain family from the API/auth
+// hosts above (.com web app vs .io API).
+//
+// integration: CONFIRMED real (client, live-tested) --
+//   https://integration.servicetitan.com/#/new/inventory/purchase-orders/details/{id}
+// production: NOT independently confirmed by the client -- "go.servicetitan.com"
+//   rather than a bare "servicetitan.com" (the client's own guess) because
+//   THREE independently-found real production deep links (for Job, Invoice,
+//   and Customer records -- found during the earlier "View in ServiceTitan"
+//   research, see CLAUDE.md) all live on go.servicetitan.com, and one of
+//   them ALSO used the exact same "/#/new/..." route-prefix as this
+//   CONFIRMED sandbox PO pattern (a dashboards deep link), which is
+//   reasonably strong corroborating evidence. Still not a live-tested fact
+//   for Purchase Orders specifically in production -- verify once
+//   production access exists.
+const WEB_APP_BASES: Record<string, string> = {
+  integration: "https://integration.servicetitan.com",
+  production: "https://go.servicetitan.com",
+};
+
 interface PoType {
   id: number;
   name: string;
@@ -130,6 +152,19 @@ export class ServiceTitanClient {
       throw new Error(`PurchaseOrders_Create failed: ${resp.status} ${errorText}`);
     }
     return resp.json();
+  }
+
+  /**
+   * Deep link to view a created PO in ServiceTitan's own web app -- see
+   * WEB_APP_BASES above for the confirmed/inferred URL pattern per
+   * environment. `poId` MUST be the PO's INTERNAL numeric id (e.g. 20522,
+   * PurchaseOrders_Create response's `id` field) -- CONFIRMED (client,
+   * live-tested) this is NOT the same as the human-facing display PO number
+   * (e.g. "2117-005"); using the display number here produces a broken link.
+   */
+  buildPurchaseOrderViewUrl(poId: number): string {
+    const base = WEB_APP_BASES[this.environment] ?? WEB_APP_BASES.integration;
+    return `${base}/#/new/inventory/purchase-orders/details/${poId}`;
   }
 
   /**

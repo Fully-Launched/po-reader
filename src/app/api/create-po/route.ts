@@ -170,7 +170,17 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await client.createPurchaseOrder(payload);
-    return NextResponse.json(result);
+    // poViewUrl is COMPUTED by us, not returned by ServiceTitan -- see
+    // ServiceTitanClient.buildPurchaseOrderViewUrl()'s doc comment. `id`
+    // must be the internal numeric id (confirmed distinct from the display
+    // PO number, e.g. "2117-005") -- null if the response doesn't have one,
+    // so the frontend can fall back to a disabled button rather than a
+    // broken link.
+    const poId = typeof result.id === "number" ? result.id : null;
+    return NextResponse.json({
+      ...result,
+      poViewUrl: poId !== null ? client.buildPurchaseOrderViewUrl(poId) : null,
+    });
   } catch (err) {
     console.error("PurchaseOrders_Create failed:", err);
     return errorResponse(upstreamFailureError("create the purchase order in ServiceTitan"), 502);

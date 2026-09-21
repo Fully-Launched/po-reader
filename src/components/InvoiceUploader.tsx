@@ -25,9 +25,11 @@ import { ReviewTable, type SubmitError } from "./ReviewTable";
 //     inline error (see ReviewTable's submitError prop) instead of
 //     discarding their edited draft -- the mockup has no error state to
 //     model this against.
-//   - "View in ServiceTitan" on the confirmation screen is disabled: there's
-//     no confirmed URL pattern for deep-linking into a ServiceTitan tenant's
-//     PO view (see CLAUDE.md open questions).
+//   - "View in ServiceTitan" on the confirmation screen links to the created
+//     PO using a CONFIRMED real deep-link pattern (client, live-tested) --
+//     see ServiceTitanClient.buildPurchaseOrderViewUrl(). Falls back to a
+//     disabled button with an honest tooltip only if the create-po response
+//     had no usable internal id to build the link from.
 //   - Multi-invoice bundle support (see CLAUDE.md's "Multi-invoice batch
 //     flow" section): a PDF containing several invoices back-to-back (a
 //     real Arco delivery format) is not in the mockup at all -- new queue
@@ -504,7 +506,11 @@ function BatchSummaryScreen({
 
         <div className="log-list" style={{ marginTop: 16, width: "100%" }}>
           {queue.map((item, i) => {
+            // `number` (display PO number, e.g. "2117-005") preferred over
+            // `id` (internal numeric id, e.g. 20522 -- used for poViewUrl
+            // instead, NOT for display -- CONFIRMED distinct fields, client).
             const poNumber = item.poResult?.number ?? item.poResult?.poNumber ?? item.poResult?.id ?? "unknown";
+            const poViewUrl = item.poResult?.poViewUrl;
             return (
               <div className="log-row" key={i}>
                 <div className="left">
@@ -513,7 +519,14 @@ function BatchSummaryScreen({
                     {item.invoice?.vendorName ?? "Invoice"} &middot; #{item.invoice?.invoiceNumber ?? "—"}
                   </span>
                 </div>
-                <span className="pill success">PO #{String(poNumber)}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="pill success">PO #{String(poNumber)}</span>
+                  {typeof poViewUrl === "string" && (
+                    <a href={poViewUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost">
+                      View
+                    </a>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -538,10 +551,11 @@ function ConfirmationScreen({
   poResult: Record<string, unknown>;
   onStartOver: () => void;
 }) {
-  // ServiceTitan's PurchaseOrders_Create response shape isn't confirmed
-  // live (see CLAUDE.md) -- try the field names that seem most plausible
-  // rather than assuming one.
+  // `number` (display PO number, e.g. "2117-005") preferred over `id`
+  // (internal numeric id, e.g. 20522 -- used for poViewUrl instead, NOT for
+  // display -- CONFIRMED distinct fields, client, live-tested).
   const poNumber = poResult.number ?? poResult.poNumber ?? poResult.id ?? "unknown";
+  const poViewUrl = poResult.poViewUrl;
 
   return (
     <div className="screen">
@@ -588,24 +602,26 @@ function ConfirmationScreen({
         )}
 
         <div className="confirm-actions">
-          {/* Disabled: no confirmed URL pattern for deep-linking into a
-              ServiceTitan tenant's PO view. RESEARCHED (same rigor as the
-              warehouse-endpoint research): confirmed real go.servicetitan.com
-              deep-link patterns exist for OTHER resource types (Job, Invoice,
-              Customer), but they aren't uniform ("Job/Index/{id}" vs
-              "EditInvoice/{id}" vs lowercase "customer/{id}"), so none can be
-              safely inferred for Purchase Orders by analogy -- see CLAUDE.md
-              open questions for the full trail. Deliberately shipping a
-              disabled button with an honest tooltip instead of a guessed,
-              possibly-broken link. */}
-          <button
-            type="button"
-            className="btn-secondary"
-            disabled
-            title="Find this PO in ServiceTitan under Purchase Orders"
-          >
-            View in ServiceTitan
-          </button>
+          {/* CONFIRMED URL pattern (client, live-tested) -- see
+              ServiceTitanClient.buildPurchaseOrderViewUrl()'s doc comment.
+              poViewUrl is computed server-side in /api/create-po and comes
+              back null if the response had no usable internal id, in which
+              case this falls back to a disabled button with an honest
+              tooltip rather than a broken link. */}
+          {typeof poViewUrl === "string" ? (
+            <a href={poViewUrl} target="_blank" rel="noopener noreferrer" className="btn-secondary">
+              View in ServiceTitan
+            </a>
+          ) : (
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled
+              title="Find this PO in ServiceTitan under Purchase Orders"
+            >
+              View in ServiceTitan
+            </button>
+          )}
           <button type="button" className="btn-primary" onClick={onStartOver}>
             Upload another invoice
           </button>

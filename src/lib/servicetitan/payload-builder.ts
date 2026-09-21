@@ -46,10 +46,13 @@ const CLIENT_SHIP_TO_ADDRESS = {
   country: "USA",
 };
 
-// shipTo.description -- NOT addressed by the client's address confirmation
-// (only the address itself was confirmed); still an unconfirmed placeholder
-// pending a real value.
-const PLACEHOLDER_SHIP_DESCRIPTION = "Sandbox test PO";
+// shipTo.description -- CONFIRMED visible live on a real PO's "Ship To"
+// label in ServiceTitan (client). "Sandbox test PO" was a leftover
+// sandbox-only value; since CLIENT_SHIP_TO_ADDRESS above is real client
+// data used in every environment, this needed a real, production-appropriate
+// label too, not a sandbox artifact -- "Main Office" (Kevin's real shipping
+// address is his main office) fills that role.
+const SHIP_TO_DESCRIPTION = "Main Office";
 
 /**
  * PurchaseOrders_Create's top-level "request" field -- CONFIRMED accepted as
@@ -164,11 +167,11 @@ export function buildPoPayload({
     // Genuinely user-editable in the review table (see BuildPoPayloadArgs'
     // requiredOn doc comment) -- not computed in here.
     requiredOn,
-    // shipTo: CONFIRMED real client address + confirmed shape -- see
-    // CLIENT_SHIP_TO_ADDRESS above.
+    // shipTo: CONFIRMED real client address + description + shape -- see
+    // CLIENT_SHIP_TO_ADDRESS/SHIP_TO_DESCRIPTION above.
     shipTo: {
       address: CLIENT_SHIP_TO_ADDRESS,
-      description: PLACEHOLDER_SHIP_DESCRIPTION,
+      description: SHIP_TO_DESCRIPTION,
     },
     // shipping: CONFIRMED numeric freight cost (see file header) -- now
     // pulled from the invoice's own extracted freight line
