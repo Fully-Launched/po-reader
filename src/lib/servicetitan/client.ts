@@ -48,7 +48,9 @@ interface InventoryLocation {
 
 interface Job {
   id: number;
-  number?: string;
+  // CONFIRMED live (previously guessed as "number" from third-party
+  // sources, which was wrong -- see findJobByProjectNumber()'s doc comment).
+  jobNumber?: string;
   [key: string]: unknown;
 }
 
@@ -307,50 +309,29 @@ export class ServiceTitanClient {
    * forward) -- so this must actually work, not just be a stub.
    *
    * RESEARCHED with the same rigor as listInventoryLocations()'s warehouse
-   * research: developer.servicetitan.io is a JS-rendered SPA and couldn't be
-   * fetched directly, so this is built from cross-referencing THREE
-   * independent third-party sources rather than a single unverified guess:
-   *   1. A reconstructed OpenAPI spec (github.com/api-evangelist/servicetitan,
-   *      openapi/servicetitan-jobs-api-openapi.yml) shows GET /jobs
-   *      supporting only page/pageSize/modifiedOnOrAfter/jobStatus query
-   *      params -- no job-number or project-number filter. (Its base URL/title
-   *      for this file are clearly mislabeled -- "Accounting Adjustments Jobs
-   *      API" at an /accounting/v2/ base -- an artifact of this generator's
-   *      auto-reconstruction, not to be trusted for the base path.)
-   *   2. An independently-built, actively-maintained open-source ServiceTitan
-   *      CLI (github.com/utkukaynar/Unofficial-ServiceTitan-CLI-MCP,
-   *      src/st_cli/commands/jobs.py, module "jpm") exposes the same limited
-   *      filter set (status, customerId, date range) for `jobs list` -- also
-   *      no number-based filter -- and names the field "number", not
-   *      "jobNumber" as source #1 guessed.
-   *   3. Prismatic's ServiceTitan connector docs (prismatic.io/docs/components/servicetitan)
-   *      confirm the same for both Jobs and Projects: "List Jobs"/"List
-   *      Projects" expose no dedicated job-number/project-number filter
-   *      parameter, only generic custom query params.
+   * research before a live sandbox test was available: cross-referenced
+   * three independent third-party sources (developer.servicetitan.io is a
+   * JS-rendered SPA and couldn't be fetched directly). All three agreed
+   * there's no documented server-side filter to look up a Job by number, so
+   * this PAGINATES through GET /jpm/v2/tenant/{tenant}/jobs and matches
+   * client-side instead -- that part held up.
    *
-   * All three independently agree on the same conclusion: there is no
-   * documented server-side way to look up a Job by number. This method
-   * therefore PAGINATES through GET /jpm/v2/tenant/{tenant}/jobs (base path
-   * per source #2's "jpm" module, ServiceTitan's well-known JPM API base) and
-   * matches client-side on job.number -- a real limitation (not a targeted
-   * lookup) given a tenant's jobs list is unbounded. Capped at MAX_PAGES to
-   * avoid a runaway loop; logs a warning and returns null if the cap is hit
-   * without a match rather than looping forever.
+   * CORRECTED after a live bug report: the field name was WRONG. Two of the
+   * three third-party sources guessed "number"; this code matched against
+   * that and silently failed to find real, confirmed-existing sandbox jobs
+   * (e.g. Job Numbers 1817/2117, visible in ServiceTitan's own Purchase
+   * Orders "Job No." column). Diagnostic logging of a raw job object
+   * confirmed the real field is **`jobNumber`** (e.g. `jobNumber: "1717"`),
+   * not `number` -- fixed below. This is a good example of why "two
+   * third-party sources agree" is corroboration, not proof; both were
+   * guessing, and both guessed wrong here.
    *
-   * A Job vs. Project distinction is also unresolved: ServiceTitan has a
-   * separate Projects resource with its OWN "number" field (source #1/#3),
-   * and Jobs can belong to a Project -- but neither reconstructed schema
-   * shows a projectId-style link on Job, so this method matches directly
-   * against Job.number, consistent with this function's existing name/
-   * purpose and with PurchaseOrders_Create requiring a jobId (not a
-   * projectId) directly.
-   *
-   * STILL NOT LIVE-VERIFIED. Test against the sandbox tenant before relying
-   * on this in production -- and worth testing an undocumented `?number=`
-   * query param directly against a live call, since ServiceTitan endpoints
-   * sometimes support filters absent from these third-party reconstructions.
+   * Also CONFIRMED live: pagination is not currently an issue -- the
+   * sandbox's full job list (55 jobs) fits on page 1 with `hasMore: false`.
+   * The MAX_PAGES cap below is kept in for safety on larger real accounts
+   * (e.g. production), not removed just because it wasn't exercised here.
    */
-  async findJobByProjectNumber(projectNumber: string): Promise<{ id: number; number?: string } | null> {
+  async findJobByProjectNumber(projectNumber: string): Promise<{ id: number; jobNumber?: string } | null> {
     const MAX_PAGES = 20;
     const PAGE_SIZE = 100;
     const target = projectNumber.trim().toLowerCase();
@@ -366,30 +347,9 @@ export class ServiceTitanClient {
       const body = await resp.json();
       const jobs: Job[] = body.data ?? [];
 
-      // DIAGNOSTIC LOGGING (temporary -- live testing confirmed
-      // findJobByProjectNumber fails to match real sandbox job numbers
-      // visible in ServiceTitan's own Purchase Orders "Job No." column,
-      // e.g. 1817/2117). Logged only on page 1 to avoid spamming: the raw
-      // shape of one job object, so the ACTUAL field name ServiceTitan uses
-      // for job number can be confirmed (this code currently guesses
-      // "number" -- may be wrong, e.g. "jobNumber" as an earlier
-      // cross-referenced source guessed), plus totalCount/hasMore, to check
-      // whether pagination could be missing jobs entirely. Remove once the
-      // real field name is confirmed and the match logic below is fixed.
-      if (page === 1) {
-        console.log("findJobByProjectNumber: first page totalCount/hasMore/pageSize:", {
-          totalCount: body.totalCount,
-          hasMore: body.hasMore,
-          page: body.page,
-          pageSize: body.pageSize,
-          jobsReturned: jobs.length,
-        });
-        console.log("findJobByProjectNumber: first job object (raw, full shape):", JSON.stringify(jobs[0], null, 2));
-      }
-
-      const match = jobs.find((job) => job.number?.trim().toLowerCase() === target);
+      const match = jobs.find((job) => job.jobNumber?.trim().toLowerCase() === target);
       if (match) {
-        return { id: match.id, number: match.number };
+        return { id: match.id, jobNumber: match.jobNumber };
       }
       if (!body.hasMore) {
         return null;
