@@ -24,3 +24,6 @@ next-env.d.ts
 *.pem
 npm-debug.log*
 .env*
+
+# claude code local settings (personal, not team policy)
+.claude/settings.local.json
