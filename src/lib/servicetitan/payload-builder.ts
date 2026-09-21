@@ -55,27 +55,19 @@ const SANDBOX_PLACEHOLDER_ADDRESS = {
  * 1. shipTo needs a nested shape -- the error named
  *    "shipTo.address"/"shipTo.description" as missing required properties
  *    UNDER shipTo, meaning shipTo is `{ address: {...}, description: "..." }`,
- *    not a flat address object.
- * 2. shipping is very likely NOT the same type as shipTo at all. Since our
- *    code sent the IDENTICAL object for both fields, yet ServiceTitan
- *    returned a *schema* error for shipTo (object parsed fine, just missing
- *    properties) versus a *JSON-parse-level* error for shipping ("Unexpected
- *    character encountered while parsing value"), the same bytes can't be
- *    "structurally valid but incomplete" in one field and "unparseable" in
- *    another unless the two fields expect genuinely different types. Best
- *    guess: shipping is a plain STRING (a shipping method/carrier), not an
- *    address object -- sending our address object's `{` where a string is
- *    expected would plausibly produce exactly this kind of parse error.
- *
- * STILL UNCONFIRMED against live docs/schema -- both of the below are
- * reasoned guesses pending a live retest, not verified facts. Update this
- * comment (and CLAUDE.md) once a live response confirms or refutes them.
+ *    not a flat address object. CONFIRMED via live 400 -- error cleared once
+ *    this shape was sent.
+ * 2. shipping is NOT an address at all, and NOT a string either -- a
+ *    follow-up live error ("Could not convert string to decimal: Ground")
+ *    confirms shipping is a NUMBER: a shipping/freight COST, not a carrier or
+ *    method name. CONFIRMED. 0 matches the sample invoice's own
+ *    "FREIGHT: 0.00" line, so it's a reasonable sandbox default, not an
+ *    arbitrary placeholder.
  */
 const SANDBOX_PLACEHOLDER_SHIP_DESCRIPTION = "Sandbox test PO";
-// Guessed shipping-method value -- "Ground" is a common carrier/method
-// placeholder, not confirmed against any ServiceTitan enum. Watch the next
-// live error for a hint at the actual expected value set.
-const SANDBOX_PLACEHOLDER_SHIPPING_METHOD = "Ground";
+// Shipping/freight cost as a number -- confirmed via live 400 (see comment
+// above). 0 mirrors the sample invoice's own "FREIGHT: 0.00" line.
+const SANDBOX_PLACEHOLDER_SHIPPING_COST = 0;
 
 export interface BuildPoPayloadArgs {
   invoice: ExtractedInvoice;
@@ -169,14 +161,23 @@ export function buildPoPayload({
     // lead time) once this is exposed in the UI.
     requiredOn: new Date().toISOString().slice(0, 10),
     // SANDBOX PLACEHOLDER -- see the shipTo/shipping shape correction comment
-    // above. shipTo is an { address, description } wrapper (confirmed shape
-    // via a live 400); shipping is guessed to be a plain string, not the
-    // same address object -- both still pending live reconfirmation.
+    // above. Both shapes now CONFIRMED via live 400s: shipTo is an
+    // { address, description } wrapper; shipping is a numeric freight cost,
+    // not an address or a carrier/method string.
     shipTo: {
       address: SANDBOX_PLACEHOLDER_ADDRESS,
       description: SANDBOX_PLACEHOLDER_SHIP_DESCRIPTION,
     },
-    shipping: SANDBOX_PLACEHOLDER_SHIPPING_METHOD,
+    shipping: SANDBOX_PLACEHOLDER_SHIPPING_COST,
+    // Placeholder for the last uncleared error from the live 400s: a
+    // required top-level "request" field, shape still totally unknown. {} is
+    // the simplest guess -- CLAUDE.md's existing hypothesis is that this is
+    // actually ASP.NET duplicate-validation-key noise tied to the
+    // now-fixed shipTo/shipping fields, not a real field at all, so this may
+    // turn out to be unnecessary or even wrong. Log/inspect the next live
+    // response and remove this if "request" was never a real field, or fix
+    // its shape once the error (if any) names what's missing inside it.
+    request: {},
   };
 }
 
