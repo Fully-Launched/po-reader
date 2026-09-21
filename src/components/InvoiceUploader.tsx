@@ -513,6 +513,24 @@ function BatchInvoiceScreen({
   );
 }
 
+// ServiceTitan's PurchaseOrders_Create response shape for `status` isn't
+// independently confirmed against a live call (see CLAUDE.md's Production
+// Rollout Checklist -- whether a given PO Type auto-receives is entirely a
+// ServiceTitan account-level setting this app doesn't control, and Kevin's
+// real PO Type may not have it enabled). Read defensively -- a plain
+// string, or the common ServiceTitan `{ name }` shape -- and fall back to
+// null (never assume "Received" or any other specific status) when neither
+// shape matches.
+function extractPoStatus(poResult: Record<string, unknown> | undefined): string | null {
+  const status = poResult?.status;
+  if (typeof status === "string") return status;
+  if (status && typeof status === "object" && "name" in status) {
+    const name = (status as Record<string, unknown>).name;
+    if (typeof name === "string") return name;
+  }
+  return null;
+}
+
 function BatchSummaryScreen({
   queue,
   onStartOver,
@@ -535,10 +553,16 @@ function BatchSummaryScreen({
           {skippedCount > 0 ? ` (${skippedCount} skipped -- not a valid invoice)` : ""}.
         </div>
 
+        {/* Safety-net reminder, not a status claim: whether a PO ends up Received
+            depends entirely on a ServiceTitan account-level "Automatically
+            Receive" setting on the PO Type used, configured in Kevin's own
+            ServiceTitan account -- this app never sets receive status itself.
+            Each row below shows the actual status ServiceTitan returned for
+            that PO (see extractPoStatus above) rather than assuming one. */}
         <div className="banner banner-warning" style={{ marginTop: 12 }}>
           <i className="ti ti-alert-triangle" />
-          Remember to double-check each PO shows as <strong>Received</strong> in ServiceTitan.
-          Auto-receive depends on a setting on the PO Type used, not on this app.
+          Remember to double-check each PO&apos;s status in ServiceTitan matches what&apos;s shown below.
+          Receive status depends entirely on a setting on the PO Type used, not on this app.
         </div>
 
         <div className="log-list" style={{ marginTop: 16, width: "100%" }}>
@@ -548,6 +572,7 @@ function BatchSummaryScreen({
             // instead, NOT for display -- CONFIRMED distinct fields, client).
             const poNumber = item.poResult?.number ?? item.poResult?.poNumber ?? item.poResult?.id ?? "unknown";
             const poViewUrl = item.poResult?.poViewUrl;
+            const poStatus = extractPoStatus(item.poResult);
             return (
               <div className="log-row" key={i}>
                 <div className="left">
@@ -562,6 +587,7 @@ function BatchSummaryScreen({
                   ) : (
                     <>
                       <span className="pill success">PO #{String(poNumber)}</span>
+                      {poStatus && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{poStatus}</span>}
                       {typeof poViewUrl === "string" && (
                         <a href={poViewUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost">
                           View
@@ -599,6 +625,15 @@ function ConfirmationScreen({
   // display -- CONFIRMED distinct fields, client, live-tested).
   const poNumber = poResult.number ?? poResult.poNumber ?? poResult.id ?? "unknown";
   const poViewUrl = poResult.poViewUrl;
+  // Whether a PO ends up Received (or Sent, or anything else) depends
+  // entirely on the "Automatically Receive" setting of the PO Type used in
+  // Kevin's own ServiceTitan account -- NOT something this app's payload
+  // controls. Rather than hardcoding "auto-received" as a stated fact
+  // (wrong for a PO Type without that setting, e.g. if Kevin wants to
+  // receive POs himself -- see CLAUDE.md's Production Rollout Checklist),
+  // this reflects whatever status ServiceTitan actually returned for THIS
+  // PO. See extractPoStatus above.
+  const poStatus = extractPoStatus(poResult);
 
   return (
     <div className="screen">
@@ -608,21 +643,26 @@ function ConfirmationScreen({
         </div>
         <div className="confirm-title">Purchase order created</div>
         <div className="confirm-sub">
-          PO #{String(poNumber)} &middot; created and auto-received in ServiceTitan
+          PO #{String(poNumber)} &middot; created in ServiceTitan
+          {poStatus ? ` — status: ${poStatus}` : ""}
           {/* NOT claiming "and billed automatically" -- whether a bill auto-generates on receipt
               depends on the client's Inventory Configuration setting, which is still an open
               question in CLAUDE.md, not something this tool has confirmed either way. */}
         </div>
 
-        {/* Safety-net reminder, not a status warning: auto-receive is a ServiceTitan-side
-            "Automatically Receive" setting on the PO Type used, configured in Kevin's own
-            ServiceTitan account -- this app never sets receive status itself, it only selects
-            which existing PO Type to reference. Keep this reminder even once that setting is
-            reliably working, as a safety net in case the account-side config ever changes. */}
+        {/* Safety-net reminder, not a status claim: whether this PO is Received
+            depends entirely on a ServiceTitan-side "Automatically Receive"
+            setting on the PO Type used, configured in Kevin's own ServiceTitan
+            account -- this app never sets receive status itself, it only
+            selects which existing PO Type to reference. The status named here
+            is whatever ServiceTitan actually returned above, not an assumption
+            -- keep this reminder regardless, as a safety net against
+            ServiceTitan-side drift (a stale response, a PO Type reconfigured
+            after the fact, etc). */}
         <div className="banner banner-warning" style={{ marginTop: 12 }}>
           <i className="ti ti-alert-triangle" />
-          Remember to double-check this PO shows as <strong>Received</strong> in ServiceTitan.
-          Auto-receive depends on a setting on the PO Type used, not on this app.
+          Remember to double-check this PO shows as <strong>{poStatus ?? "the expected status"}</strong> in ServiceTitan.
+          Receive status depends entirely on a setting on the PO Type used, not on this app.
         </div>
 
         {invoice && (
