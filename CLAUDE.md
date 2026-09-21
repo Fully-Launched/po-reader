@@ -141,10 +141,7 @@ All of the following must be set as **Vercel environment variables** — never c
 ## Collaboration Notes
 
 - **Matteo** is a collaborator on this repo.
-- Standard workflow:
-  1. Pull before starting work.
-  2. Branch per feature (don't work directly on `main`).
-  3. Open a PR into `main` rather than pushing directly to `main`.
+- Current workflow (as of Sept 2026): commit and push directly to `main`. This is early-stage solo development with no active code review process yet, so branch-per-feature + PR is unnecessary overhead for now. **Reconsider and reinstate branch-per-feature + PR review once either**: (a) Matteo is actively contributing code, or (b) this tool is handling Kevin's/Comfort x Design's real production data (see the Status Checklist's "Production tested and validated" / "Live for daily use" items) -- both raise the cost of an unreviewed bad change enough to justify the overhead.
 
 ## Status Checklist
 
