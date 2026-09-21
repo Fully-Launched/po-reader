@@ -6,23 +6,24 @@
 // of the three vendors. The real strategy depends on which vendor the
 // invoice is from:
 //
-//   - "ARCO SUPPLY CO" and "Supply House" (which remaps to ServiceTitan
+//   - Arco Supply Co. and "Supply House" (which remaps to ServiceTitan
 //     vendor "Chase" -- see vendor-remap.ts, a SEPARATE concern from this
 //     module): consolidate ALL extracted line items into a single PO line,
 //     description "Bulk Rough Material," quantity 1, cost = sum of every
 //     line item's own total. No per-item Pricebook matching at all for
 //     these vendors -- see buildLineItemsForVendor()'s BULK_CONSOLIDATION
 //     branch below.
-//   - "TEC" (Carrier): keep per-item Pricebook matching for items that DO
-//     match; anything that doesn't match is consolidated into a single
-//     "Bulk Equipment Material" catch-all line (quantity 1, cost = sum of
-//     the unmatched items' totals) instead of blocking submission.
+//   - Any vendor name containing "TEC" (which remaps to ServiceTitan vendor
+//     "TEC" -- see vendor-remap.ts): keep per-item Pricebook matching for
+//     items that DO match; anything that doesn't match is consolidated into
+//     a single "Bulk Equipment Material" catch-all line (quantity 1, cost =
+//     sum of the unmatched items' totals) instead of blocking submission.
 //   - Any other/unrecognized vendor: falls back to the original strict
 //     per-item behavior (fail loudly naming every unmatched description).
 //     Only 3 vendors exist for this tool (see CLAUDE.md Project Purpose) --
-//     extend BULK_CONSOLIDATION_VENDOR_NAMES/CATCH_ALL_VENDOR_NAMES below
-//     once the other 2 vendors' real invoice samples confirm their exact
-//     vendor-name text and strategy.
+//     extend BULK_CONSOLIDATION_VENDOR_ALIASES/CATCH_ALL_VENDOR_ALIASES
+//     below once the other 2 vendors' real invoice samples confirm their
+//     exact vendor-name text and strategy.
 //
 // Matching is done against the invoice's OWN extracted vendor text (NOT the
 // ServiceTitan-resolved vendor from vendor-remap.ts) since that's what's
@@ -32,19 +33,24 @@ import type { InvoiceLineItem } from "../types";
 import type { PoLineItem } from "./payload-builder";
 import type { ServiceTitanClient } from "./client";
 import { notFoundError } from "../error-messages";
+import { matchesAnyAlias } from "./vendor-name-matching";
 
 export const BULK_ROUGH_MATERIAL_DESCRIPTION = "Bulk Rough Material";
 export const BULK_EQUIPMENT_MATERIAL_DESCRIPTION = "Bulk Equipment Material";
 
-const BULK_CONSOLIDATION_VENDOR_NAMES = new Set(["arco supply co", "supply house"]);
-const CATCH_ALL_VENDOR_NAMES = new Set(["tec"]);
+// Matched via matchesAnyAlias() (normalize + substring, NOT exact equality)
+// -- this used to be exact-match Sets, which had the SAME bug fixed in
+// vendor-remap.ts: a real invoice's exact printed text (spacing/punctuation/
+// suffixes) rarely matches a hand-typed exact string. See
+// vendor-name-matching.ts.
+const BULK_CONSOLIDATION_VENDOR_ALIASES = ["arco supply co", "supply house", "supplyhouse"];
+const CATCH_ALL_VENDOR_ALIASES = ["tec"];
 
 export type LineItemStrategy = "bulk-consolidation" | "catch-all" | "strict";
 
 export function resolveLineItemStrategy(invoiceVendorName: string): LineItemStrategy {
-  const key = invoiceVendorName.trim().toLowerCase();
-  if (BULK_CONSOLIDATION_VENDOR_NAMES.has(key)) return "bulk-consolidation";
-  if (CATCH_ALL_VENDOR_NAMES.has(key)) return "catch-all";
+  if (matchesAnyAlias(invoiceVendorName, BULK_CONSOLIDATION_VENDOR_ALIASES)) return "bulk-consolidation";
+  if (matchesAnyAlias(invoiceVendorName, CATCH_ALL_VENDOR_ALIASES)) return "catch-all";
   return "strict";
 }
 

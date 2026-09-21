@@ -8,10 +8,12 @@
 // space, ".com" suffix) fell through unmapped and vendor lookup 404'd.
 // Fixed by matching on a NORMALIZED (lowercased, punctuation/whitespace
 // stripped) alias as a SUBSTRING of the similarly-normalized invoice text,
-// not exact equality -- see normalize()/resolveServiceTitanVendorName()
-// below. Each rule lists every alias variant seen/expected for that vendor;
-// add more as new invoice samples confirm new variants. Kept as a data
-// table, not inline if-checks, so this stays easy to extend.
+// not exact equality -- see vendor-name-matching.ts. Each rule lists every
+// alias variant seen/expected for that vendor; add more as new invoice
+// samples confirm new variants. Kept as a data table, not inline
+// if-checks, so this stays easy to extend.
+import { matchesAnyAlias } from "./vendor-name-matching";
+
 interface VendorRemapRule {
   serviceTitanVendorName: string;
   aliases: string[];
@@ -22,21 +24,23 @@ const VENDOR_REMAP_RULES: VendorRemapRule[] = [
     // CONFIRMED on a client call: invoice vendor text "Supply House"
     // resolves to the real ServiceTitan vendor "Chase". "supplyhouse" (no
     // space) covers the real "SupplyHouse.com" variant too, since matching
-    // is substring-based on normalized text -- see normalize() below.
+    // is substring-based on normalized text -- see vendor-name-matching.ts.
     serviceTitanVendorName: "Chase",
     aliases: ["supply house", "supplyhouse"],
   },
+  {
+    // Per explicit client instruction: map any vendor name containing "TEC"
+    // straight to ServiceTitan vendor "TEC" -- NOT independently verified
+    // against a live findVendorByName() lookup (blocked on sandbox
+    // credential access at the time this was added, see CLAUDE.md Open
+    // Questions). If ServiceTitan's real vendor record turns out to be
+    // named something else (e.g. "TEC Distribution", "National Excelsior
+    // Co." -- the latter wouldn't match this "tec" substring rule at all,
+    // a known gap), update serviceTitanVendorName here once confirmed.
+    serviceTitanVendorName: "TEC",
+    aliases: ["tec"],
+  },
 ];
-
-// Lowercases and strips everything except letters/digits, so "SupplyHouse.com",
-// "Supply House", and "Supply House, Inc." all normalize to a comparable form
-// (e.g. "supplyhousecom", "supplyhouse", "supplyhouseinc") -- letting a
-// shorter alias like "supplyhouse" match as a substring of any of them,
-// regardless of spacing, punctuation, or suffixes the vendor happens to
-// print.
-function normalize(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
 
 /**
  * Resolves the invoice's extracted vendor text to the ServiceTitan vendor
@@ -45,11 +49,6 @@ function normalize(text: string): string {
  * ServiceTitan vendor name directly and need no remapping.
  */
 export function resolveServiceTitanVendorName(invoiceVendorName: string): string {
-  const normalizedInvoiceName = normalize(invoiceVendorName);
-  for (const rule of VENDOR_REMAP_RULES) {
-    if (rule.aliases.some((alias) => normalizedInvoiceName.includes(normalize(alias)))) {
-      return rule.serviceTitanVendorName;
-    }
-  }
-  return invoiceVendorName;
+  const rule = VENDOR_REMAP_RULES.find((r) => matchesAnyAlias(invoiceVendorName, r.aliases));
+  return rule?.serviceTitanVendorName ?? invoiceVendorName;
 }
