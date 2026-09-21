@@ -46,6 +46,37 @@ const SANDBOX_PLACEHOLDER_ADDRESS = {
   country: "USA",
 };
 
+/**
+ * shipTo/shipping SHAPE CORRECTION (from a live PurchaseOrders_Create 400 on
+ * a real 56-line-item Arco invoice): the original guess of sending the same
+ * flat SANDBOX_PLACEHOLDER_ADDRESS object for both fields was wrong on TWO
+ * counts, confirmed by the error response itself:
+ *
+ * 1. shipTo needs a nested shape -- the error named
+ *    "shipTo.address"/"shipTo.description" as missing required properties
+ *    UNDER shipTo, meaning shipTo is `{ address: {...}, description: "..." }`,
+ *    not a flat address object.
+ * 2. shipping is very likely NOT the same type as shipTo at all. Since our
+ *    code sent the IDENTICAL object for both fields, yet ServiceTitan
+ *    returned a *schema* error for shipTo (object parsed fine, just missing
+ *    properties) versus a *JSON-parse-level* error for shipping ("Unexpected
+ *    character encountered while parsing value"), the same bytes can't be
+ *    "structurally valid but incomplete" in one field and "unparseable" in
+ *    another unless the two fields expect genuinely different types. Best
+ *    guess: shipping is a plain STRING (a shipping method/carrier), not an
+ *    address object -- sending our address object's `{` where a string is
+ *    expected would plausibly produce exactly this kind of parse error.
+ *
+ * STILL UNCONFIRMED against live docs/schema -- both of the below are
+ * reasoned guesses pending a live retest, not verified facts. Update this
+ * comment (and CLAUDE.md) once a live response confirms or refutes them.
+ */
+const SANDBOX_PLACEHOLDER_SHIP_DESCRIPTION = "Sandbox test PO";
+// Guessed shipping-method value -- "Ground" is a common carrier/method
+// placeholder, not confirmed against any ServiceTitan enum. Watch the next
+// live error for a hint at the actual expected value set.
+const SANDBOX_PLACEHOLDER_SHIPPING_METHOD = "Ground";
+
 export interface BuildPoPayloadArgs {
   invoice: ExtractedInvoice;
   vendorId: number;
@@ -137,12 +168,15 @@ export function buildPoPayload({
     // ServiceTitan expects something more specific (e.g. vendor's quoted
     // lead time) once this is exposed in the UI.
     requiredOn: new Date().toISOString().slice(0, 10),
-    // SANDBOX PLACEHOLDER -- see SANDBOX_PLACEHOLDER_ADDRESS above. Using the
-    // same object for both shipTo and shipping since it's unconfirmed
-    // whether they're meant to hold the same or different data (address vs.
-    // e.g. a shipping method) -- verify against the live schema.
-    shipTo: SANDBOX_PLACEHOLDER_ADDRESS,
-    shipping: SANDBOX_PLACEHOLDER_ADDRESS,
+    // SANDBOX PLACEHOLDER -- see the shipTo/shipping shape correction comment
+    // above. shipTo is an { address, description } wrapper (confirmed shape
+    // via a live 400); shipping is guessed to be a plain string, not the
+    // same address object -- both still pending live reconfirmation.
+    shipTo: {
+      address: SANDBOX_PLACEHOLDER_ADDRESS,
+      description: SANDBOX_PLACEHOLDER_SHIP_DESCRIPTION,
+    },
+    shipping: SANDBOX_PLACEHOLDER_SHIPPING_METHOD,
   };
 }
 
