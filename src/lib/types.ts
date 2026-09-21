@@ -48,6 +48,16 @@ export interface ExtractedInvoice {
   projectNumber: string | null;
   lineItems: InvoiceLineItem[];
   taxAmount: number | null;
+  /**
+   * The invoice's own freight/shipping charge, if it has one (e.g. Arco
+   * Supply invoices carry a "FREIGHT: 0.00" line -- usually zero, but not
+   * always). CONFIRMED (client call) this must flow into
+   * PurchaseOrders_Create's top-level `shipping` field (a numeric freight
+   * cost) rather than being hardcoded -- see buildPoPayload() in
+   * src/lib/servicetitan/payload-builder.ts. Null when no freight line was
+   * found; treated as 0 at payload-build time in that case.
+   */
+  freightAmount: number | null;
   subtotal: number;
   total: number;
   extractionConfidence: ExtractionConfidence;

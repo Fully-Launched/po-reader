@@ -6,10 +6,26 @@ import { reviewWarnings, hasRequiredFields, isNotAnInvoice } from "@/lib/service
 
 interface ReviewTableProps {
   invoice: ExtractedInvoice;
-  onConfirm: (invoice: ExtractedInvoice, businessUnitId: number, inventoryLocationId: number) => void;
+  onConfirm: (
+    invoice: ExtractedInvoice,
+    businessUnitId: number,
+    inventoryLocationId: number,
+    requiredOn: string,
+  ) => void;
   onCancel: () => void;
   submitting: boolean;
   submitError: string | null;
+}
+
+// Today's date (YYYY-MM-DD) in the browser's local timezone -- requiredOn's
+// default. Deliberately NOT `new Date().toISOString()` (UTC), which can read
+// as the wrong day near local midnight.
+function todayLocalDate(): string {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 // Generic loader for the Business Unit / Inventory Location dropdowns --
@@ -124,6 +140,11 @@ const VISIBLE_LINE_ITEM_LIMIT = 3; // matches the "+N more line items" treatment
 export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitError }: ReviewTableProps) {
   const [draft, setDraft] = useState<ExtractedInvoice>(invoice);
   const [showAllLineItems, setShowAllLineItems] = useState(false);
+  // Defaults to today but is genuinely editable, including backdating --
+  // confirmed with the client as a real requirement, not just a display
+  // value. Plain <input type="date"> imposes no min/max, so past dates are
+  // selectable.
+  const [requiredOn, setRequiredOn] = useState(todayLocalDate);
   const businessUnit = useIdNameOptions("/api/business-units", "HVAC Service");
   const inventoryLocation = useIdNameOptions("/api/inventory-locations");
 
@@ -151,7 +172,8 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
     !submitting &&
     hasRequiredFields(draft) &&
     idFilled(businessUnit.selectedId) &&
-    idFilled(inventoryLocation.selectedId);
+    idFilled(inventoryLocation.selectedId) &&
+    requiredOn.trim() !== "";
 
   function updateField<K extends keyof ExtractedInvoice>(key: K, value: ExtractedInvoice[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -282,7 +304,7 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
         </button>
       </div>
 
-      <div className="card grid-3">
+      <div className="card grid-2">
         <div>
           <label>Subtotal</label>
           <input
@@ -312,6 +334,16 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
             onChange={(e) => updateField("total", Number(e.target.value))}
           />
         </div>
+        <div>
+          <label>Freight / shipping</label>
+          <input
+            className="mono"
+            type="number"
+            placeholder="0.00"
+            value={draft.freightAmount ?? ""}
+            onChange={(e) => updateField("freightAmount", e.target.value === "" ? null : Number(e.target.value))}
+          />
+        </div>
       </div>
 
       {warnings.length === 0 ? (
@@ -334,7 +366,7 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
         </div>
       )}
 
-      <div className="card grid-2">
+      <div className="card grid-3">
         <IdNameSelect
           label="Business Unit"
           options={businessUnit.options}
@@ -353,6 +385,18 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
           emptyMessage="No inventory locations found for this tenant."
           disabled={submitting}
         />
+        <div>
+          <label>Required on</label>
+          {/* No min attribute -- confirmed with the client this needs to
+              allow backdating, not just today/future dates. */}
+          <input
+            className="mono"
+            type="date"
+            value={requiredOn}
+            onChange={(e) => setRequiredOn(e.target.value)}
+            disabled={submitting}
+          />
+        </div>
       </div>
 
       {submitError && (
@@ -366,7 +410,9 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
         type="button"
         className="btn-primary"
         disabled={!canSubmit}
-        onClick={() => onConfirm(draft, Number(businessUnit.selectedId), Number(inventoryLocation.selectedId))}
+        onClick={() =>
+          onConfirm(draft, Number(businessUnit.selectedId), Number(inventoryLocation.selectedId), requiredOn)
+        }
       >
         {submitting ? "Creating purchase order..." : "Create purchase order"}
       </button>

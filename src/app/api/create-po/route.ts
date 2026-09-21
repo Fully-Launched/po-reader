@@ -7,8 +7,12 @@ import { buildPoPayload, hasRequiredFields, isNotAnInvoice } from "@/lib/service
 // exist as "Supply House Run" in the sandbox -- this is the ONLY way a PO
 // ends up Received (and a bill auto-generated) via the API, since
 // ServiceTitan's own docs confirm PO status cannot be updated after
-// creation. Re-verify this name once production access exists -- it may
-// differ from the sandbox's PO Type naming.
+// creation. This is a ServiceTitan-side setting configured on the PO Type
+// itself in Kevin's account -- this app does not set or control receive
+// status directly, it only selects which existing PO Type to reference by
+// name/ID (see getPoTypeIdByName() below). Re-verify this name once
+// production access exists -- it may differ from the sandbox's PO Type
+// naming.
 const AUTO_RECEIVE_PO_TYPE_NAME =
   process.env.SERVICETITAN_AUTO_RECEIVE_PO_TYPE_NAME ?? "Supply House Run";
 
@@ -19,25 +23,38 @@ interface CreatePoRequestBody {
   // (GET /api/inventory-locations) -- REQUIRED top-level field on
   // PurchaseOrders_Create, confirmed via a live 400.
   inventoryLocationId: number;
+  // Date (YYYY-MM-DD) ServiceTitan requires materials by -- REQUIRED
+  // top-level field. Set via a genuinely editable date input in the review
+  // table (ReviewTable.tsx), defaulting to today but allowing past dates.
+  requiredOn: string;
 }
 
 // POST /api/create-po
 // Takes the human-reviewed/corrected ExtractedInvoice from the review table
-// and creates + auto-receives a Purchase Order in ServiceTitan.
+// and creates a Purchase Order in ServiceTitan.
 //
 // There is deliberately no separate "receive" call here: ServiceTitan's API
 // does not support updating PO status after creation ("A purchase order
 // status cannot be updated through API" -- confirmed in their developer
-// docs). Receiving (and auto-bill-creation, if enabled on the client's
-// account) happens automatically at creation time, purely because the PO is
-// created with a PO Type that has "Automatically Receive" enabled.
+// docs). Whether the PO ends up auto-received (and, if enabled, auto-billed)
+// is determined ENTIRELY by a ServiceTitan-side "Automatically Receive"
+// setting on the selected PO Type (poTypeId), configured in Kevin's
+// ServiceTitan account -- this app's payload never sets a status/receive
+// field itself, it only picks which already-configured PO Type to
+// reference. See the confirmation screen's reminder to double-check receive
+// status in ServiceTitan as a safety net for this.
 export async function POST(req: NextRequest) {
   const body: CreatePoRequestBody = await req.json();
-  const { invoice, businessUnitId, inventoryLocationId } = body;
+  const { invoice, businessUnitId, inventoryLocationId, requiredOn } = body;
 
-  if (!invoice || typeof businessUnitId !== "number" || typeof inventoryLocationId !== "number") {
+  if (
+    !invoice ||
+    typeof businessUnitId !== "number" ||
+    typeof inventoryLocationId !== "number" ||
+    typeof requiredOn !== "string"
+  ) {
     return NextResponse.json(
-      { error: "Request body must include 'invoice', 'businessUnitId', and 'inventoryLocationId'" },
+      { error: "Request body must include 'invoice', 'businessUnitId', 'inventoryLocationId', and 'requiredOn'" },
       { status: 400 },
     );
   }
@@ -137,6 +154,7 @@ export async function POST(req: NextRequest) {
     inventoryLocationId,
     poTypeId,
     lineItemSkuIds,
+    requiredOn,
   });
 
   try {

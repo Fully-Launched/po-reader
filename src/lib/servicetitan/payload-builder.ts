@@ -12,74 +12,54 @@
 //   2. Top-level: once item-level validation passed, a second 400 surfaced
 //      shipTo, shipping, requiredOn, inventoryLocationId, and
 //      impactsTechnicianPayroll as missing required top-level fields (plus
-//      a generic "request" error -- see the note on SANDBOX_PLACEHOLDER_ADDRESS
-//      below and CLAUDE.md for why that's almost certainly duplicate noise
-//      tied to these same missing fields, not a wrapper-object mismatch).
+//      a "request" field -- see the note near REQUEST_PLACEHOLDER below).
+//      A real end-to-end sandbox test (PO #19969, 56 line items, correctly
+//      auto-received) confirms all of these shapes now work.
 //
 // NOTE: field names/shapes below are modeled on the publicly documented
-// Inventory API shape plus those live 400s' error detail -- NOT verified
-// against a full live schema (developer.servicetitan.io's API reference is
-// a JS-rendered page that couldn't be fetched for this fix). Verify against
-// the live API reference before this goes to production.
+// Inventory API shape plus live 400s' error detail, and confirmed working
+// via a real PO creation (see above) -- but individual endpoints not
+// exercised by that one test (see per-field notes) remain unverified against
+// a full live schema. Re-verify against the live API reference before
+// relying on anything not explicitly marked CONFIRMED below.
 
 import type { ExtractedInvoice } from "../types";
 
 /**
- * SANDBOX PLACEHOLDER ADDRESS -- NOT CONFIRMED AS COMFORT X DESIGN'S REAL
- * SHIPPING/RECEIVING ADDRESS. Pulled from ad-hoc test invoice data purely to
- * get sandbox PurchaseOrders_Create calls past validation while the real
- * shipTo/shipping schema and the client's actual address are unconfirmed.
- * MUST be replaced with the client-provided address (or a real address
- * lookup) before any production use -- see CLAUDE.md open questions.
+ * Comfort x Design's CONFIRMED REAL shipping/receiving address -- 510 South
+ * Spring Road, Elmhurst, IL 60126, no unit/suite (confirmed on a client call
+ * with Kevin). This is NOT a placeholder or a guess; it's the actual address
+ * to use for `shipTo` in every environment, sandbox and production alike.
  *
- * Shape is a best-effort guess (street/city/state/zip/country, matching the
- * address shape ServiceTitan uses elsewhere in their API, e.g. Customer/Job
- * locations) -- NOT verified against PurchaseOrders_Create's actual schema.
+ * The nested shape (`{ address: {...}, description: "..." }` under `shipTo`,
+ * with `address.unit` required and non-null) is CONFIRMED via live 400s and
+ * a successful PO creation (PO #19969) -- see CLAUDE.md's top-level-fields
+ * correction for the full trail.
  */
-const SANDBOX_PLACEHOLDER_ADDRESS = {
+const CLIENT_SHIP_TO_ADDRESS = {
   name: "Comfort X Design, Inc.",
   street: "510 S Spring Road",
-  // Was `null` -- a live 400 reported "shipTo.Address.Unit is required".
-  // Keeping the key lowercase ("unit"), NOT switching to "Unit": the prior
-  // live 400 for this same shipTo object named "shipTo.address"/
-  // "shipTo.description" in lowercase, matching our sent keys exactly, and
-  // those errors cleared once we sent those exact lowercase keys -- direct
-  // evidence ServiceTitan reads this object's keys as we send them, not
-  // PascalCase. ("Address"/"Unit" in the error text most likely reflects
-  // ServiceTitan's internal C# property names in their error-message
-  // formatting, not the expected JSON key.) So `null` failing a
-  // "required" check, not a key mismatch, is the more likely cause --
-  // switched to "" (empty string) since there's no real unit/suite number
-  // for this placeholder. Confirm against the next live response.
-  unit: "",
+  unit: "", // Confirmed: no unit/suite number for this address.
   city: "Elmhurst",
   state: "IL",
   zip: "60126",
   country: "USA",
 };
 
+// shipTo.description -- NOT addressed by the client's address confirmation
+// (only the address itself was confirmed); still an unconfirmed placeholder
+// pending a real value.
+const PLACEHOLDER_SHIP_DESCRIPTION = "Sandbox test PO";
+
 /**
- * shipTo/shipping SHAPE CORRECTION (from a live PurchaseOrders_Create 400 on
- * a real 56-line-item Arco invoice): the original guess of sending the same
- * flat SANDBOX_PLACEHOLDER_ADDRESS object for both fields was wrong on TWO
- * counts, confirmed by the error response itself:
- *
- * 1. shipTo needs a nested shape -- the error named
- *    "shipTo.address"/"shipTo.description" as missing required properties
- *    UNDER shipTo, meaning shipTo is `{ address: {...}, description: "..." }`,
- *    not a flat address object. CONFIRMED via live 400 -- error cleared once
- *    this shape was sent.
- * 2. shipping is NOT an address at all, and NOT a string either -- a
- *    follow-up live error ("Could not convert string to decimal: Ground")
- *    confirms shipping is a NUMBER: a shipping/freight COST, not a carrier or
- *    method name. CONFIRMED. 0 matches the sample invoice's own
- *    "FREIGHT: 0.00" line, so it's a reasonable sandbox default, not an
- *    arbitrary placeholder.
+ * PurchaseOrders_Create's top-level "request" field -- CONFIRMED accepted as
+ * an empty object with no further error (part of the PO #19969 success).
+ * Its actual purpose/shape is unknown, and per a client call, Kevin doesn't
+ * know either -- there is nothing more to learn here from our side. This is
+ * a PERMANENT placeholder, not a TODO: do not spend further effort
+ * investigating what "request" is supposed to contain.
  */
-const SANDBOX_PLACEHOLDER_SHIP_DESCRIPTION = "Sandbox test PO";
-// Shipping/freight cost as a number -- confirmed via live 400 (see comment
-// above). 0 mirrors the sample invoice's own "FREIGHT: 0.00" line.
-const SANDBOX_PLACEHOLDER_SHIPPING_COST = 0;
+const REQUEST_PLACEHOLDER = {};
 
 export interface BuildPoPayloadArgs {
   invoice: ExtractedInvoice;
@@ -121,6 +101,13 @@ export interface BuildPoPayloadArgs {
    * entry here must already be resolved (no nulls).
    */
   lineItemSkuIds: number[];
+  /**
+   * Date (YYYY-MM-DD) ServiceTitan requires materials by -- REQUIRED
+   * top-level field. Genuinely user-editable in the review table (defaults
+   * to today, but the client needs to be able to backdate it), not a fixed
+   * placeholder computed in here -- see ReviewTable.tsx's requiredOn input.
+   */
+  requiredOn: string;
 }
 
 export function buildPoPayload({
@@ -131,6 +118,7 @@ export function buildPoPayload({
   inventoryLocationId,
   poTypeId,
   lineItemSkuIds,
+  requiredOn,
 }: BuildPoPayloadArgs): Record<string, unknown> {
   if (lineItemSkuIds.length !== invoice.lineItems.length) {
     throw new Error(
@@ -158,8 +146,14 @@ export function buildPoPayload({
     memo: `Auto-created from vendor invoice #${invoice.invoiceNumber || "unknown"}`,
     items,
     tax: invoice.taxAmount,
-    // No "status" field -- status can't be set here. It's determined entirely
-    // by whether poTypeId refers to an Automatically-Receive-enabled PO Type.
+    // No "status"/"autoReceive" field here, and this payload never sets one:
+    // status is NOT something this app's payload controls. It's entirely a
+    // ServiceTitan-side "Automatically Receive" setting on the PO TYPE
+    // (poTypeId) itself, configured in Kevin's ServiceTitan account -- this
+    // code's only role is selecting which existing, already-configured PO
+    // Type to reference by ID (see ServiceTitanClient.getPoTypeIdByName()).
+    // If that PO Type's setting is ever changed or renamed on the client's
+    // account, this app has no way to detect or control that.
 
     // --- Fields added for the second live 400 (see file header) ---
 
@@ -167,29 +161,23 @@ export function buildPoPayload({
     // job or technician attached (see "Job attachment is optional" in
     // CLAUDE.md) -- there's no payroll to impact.
     impactsTechnicianPayroll: false,
-    // Not yet user-facing (see CLAUDE.md open questions) -- defaults to
-    // today, just to give ServiceTitan a valid date. Revisit if
-    // ServiceTitan expects something more specific (e.g. vendor's quoted
-    // lead time) once this is exposed in the UI.
-    requiredOn: new Date().toISOString().slice(0, 10),
-    // SANDBOX PLACEHOLDER -- see the shipTo/shipping shape correction comment
-    // above. Both shapes now CONFIRMED via live 400s: shipTo is an
-    // { address, description } wrapper; shipping is a numeric freight cost,
-    // not an address or a carrier/method string.
+    // Genuinely user-editable in the review table (see BuildPoPayloadArgs'
+    // requiredOn doc comment) -- not computed in here.
+    requiredOn,
+    // shipTo: CONFIRMED real client address + confirmed shape -- see
+    // CLIENT_SHIP_TO_ADDRESS above.
     shipTo: {
-      address: SANDBOX_PLACEHOLDER_ADDRESS,
-      description: SANDBOX_PLACEHOLDER_SHIP_DESCRIPTION,
+      address: CLIENT_SHIP_TO_ADDRESS,
+      description: PLACEHOLDER_SHIP_DESCRIPTION,
     },
-    shipping: SANDBOX_PLACEHOLDER_SHIPPING_COST,
-    // Placeholder for the last uncleared error from the live 400s: a
-    // required top-level "request" field, shape still totally unknown. {} is
-    // the simplest guess -- CLAUDE.md's existing hypothesis is that this is
-    // actually ASP.NET duplicate-validation-key noise tied to the
-    // now-fixed shipTo/shipping fields, not a real field at all, so this may
-    // turn out to be unnecessary or even wrong. Log/inspect the next live
-    // response and remove this if "request" was never a real field, or fix
-    // its shape once the error (if any) names what's missing inside it.
-    request: {},
+    // shipping: CONFIRMED numeric freight cost (see file header) -- now
+    // pulled from the invoice's own extracted freight line
+    // (ExtractedInvoice.freightAmount, editable in the review table) rather
+    // than hardcoded. Defaults to 0 only when no freight line was found.
+    shipping: invoice.freightAmount ?? 0,
+    // CONFIRMED accepted, permanent placeholder -- see REQUEST_PLACEHOLDER
+    // above. Do not remove or investigate further.
+    request: REQUEST_PLACEHOLDER,
   };
 }
 

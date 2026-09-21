@@ -34,6 +34,11 @@ Field notes:
   Arco Supply invoices show codes like "301/D" alongside a generic description). This is
   distinct from any ServiceTitan-internal identifier -- just transcribe whatever code the
   vendor printed. Use null if the line item has no separate part number field.
+- freight_amount: the invoice's own freight/shipping charge, if it has one (e.g. Arco Supply
+  invoices carry a "FREIGHT: 0.00" line near the totals). This is usually zero but not
+  always -- extract the actual printed value, don't assume it's zero. Use null only if the
+  invoice has no freight/shipping line at all, not when the line reads "0.00" (that's a
+  real value: freight_amount 0).
 - If a field is illegible or missing on a genuine invoice, use null (or "" for line item
   description) rather than guessing.
 - Set extraction_confidence to "low" if any line item amount is unclear, or if the
@@ -76,6 +81,7 @@ const EXTRACT_INVOICE_TOOL: Anthropic.Tool = {
         },
       },
       tax_amount: { type: ["number", "null"] },
+      freight_amount: { type: ["number", "null"] },
       subtotal: { type: "number" },
       total: { type: "number" },
       extraction_confidence: { type: "string", enum: ["high", "medium", "low"] },
@@ -89,6 +95,7 @@ const EXTRACT_INVOICE_TOOL: Anthropic.Tool = {
       "project_number",
       "line_items",
       "tax_amount",
+      "freight_amount",
       "subtotal",
       "total",
       "extraction_confidence",
@@ -112,6 +119,7 @@ interface RawExtraction {
     vendor_part_number: string | null;
   }[];
   tax_amount: number | null;
+  freight_amount: number | null;
   subtotal: number;
   total: number;
   extraction_confidence: "high" | "medium" | "low";
@@ -133,6 +141,7 @@ function toExtractedInvoice(raw: RawExtraction): ExtractedInvoice {
       vendorPartNumber: item.vendor_part_number,
     })),
     taxAmount: raw.tax_amount,
+    freightAmount: raw.freight_amount,
     subtotal: raw.subtotal,
     total: raw.total,
     extractionConfidence: raw.extraction_confidence,

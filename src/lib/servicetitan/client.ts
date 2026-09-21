@@ -154,9 +154,12 @@ export class ServiceTitanClient {
 
   /**
    * Look up a Purchase Order Type's ID by name (e.g. "Supply House Run",
-   * which has Automatically Receive enabled in the sandbox). Confirm exact
-   * endpoint path against the live API reference -- plausible path based on
-   * Inventory API module structure, not live-verified.
+   * which has Automatically Receive enabled in the sandbox). "Automatically
+   * Receive" is a setting configured on the PO Type itself in ServiceTitan's
+   * own UI (on the client's account) -- this method, and this app generally,
+   * never sets or controls that setting; it only looks up which existing,
+   * already-configured PO Type to reference by ID. Endpoint CONFIRMED
+   * working via a live PO creation (PO #19969, sandbox).
    */
   async getPoTypeIdByName(typeName: string): Promise<number | null> {
     const url = `${API_BASES[this.environment]}/inventory/v2/tenant/${this.tenantId}/purchase-order-types`;

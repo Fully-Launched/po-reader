@@ -91,7 +91,12 @@ export function InvoiceUploader() {
     }
   }
 
-  async function handleConfirm(invoice: ExtractedInvoice, businessUnitId: number, inventoryLocationId: number) {
+  async function handleConfirm(
+    invoice: ExtractedInvoice,
+    businessUnitId: number,
+    inventoryLocationId: number,
+    requiredOn: string,
+  ) {
     setSubmitting(true);
     setSubmitError(null);
 
@@ -99,7 +104,7 @@ export function InvoiceUploader() {
       const res = await fetch("/api/create-po", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoice, businessUnitId, inventoryLocationId }),
+        body: JSON.stringify({ invoice, businessUnitId, inventoryLocationId, requiredOn }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -260,6 +265,17 @@ function ConfirmationScreen({
           {/* NOT claiming "and billed automatically" -- whether a bill auto-generates on receipt
               depends on the client's Inventory Configuration setting, which is still an open
               question in CLAUDE.md, not something this tool has confirmed either way. */}
+        </div>
+
+        {/* Safety-net reminder, not a status warning: auto-receive is a ServiceTitan-side
+            "Automatically Receive" setting on the PO Type used, configured in Kevin's own
+            ServiceTitan account -- this app never sets receive status itself, it only selects
+            which existing PO Type to reference. Keep this reminder even once that setting is
+            reliably working, as a safety net in case the account-side config ever changes. */}
+        <div className="banner banner-warning" style={{ marginTop: 12 }}>
+          <i className="ti ti-alert-triangle" />
+          Remember to double-check this PO shows as <strong>Received</strong> in ServiceTitan.
+          Auto-receive depends on a setting on the PO Type used, not on this app.
         </div>
 
         {invoice && (
