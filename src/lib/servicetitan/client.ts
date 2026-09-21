@@ -365,6 +365,28 @@ export class ServiceTitanClient {
       }
       const body = await resp.json();
       const jobs: Job[] = body.data ?? [];
+
+      // DIAGNOSTIC LOGGING (temporary -- live testing confirmed
+      // findJobByProjectNumber fails to match real sandbox job numbers
+      // visible in ServiceTitan's own Purchase Orders "Job No." column,
+      // e.g. 1817/2117). Logged only on page 1 to avoid spamming: the raw
+      // shape of one job object, so the ACTUAL field name ServiceTitan uses
+      // for job number can be confirmed (this code currently guesses
+      // "number" -- may be wrong, e.g. "jobNumber" as an earlier
+      // cross-referenced source guessed), plus totalCount/hasMore, to check
+      // whether pagination could be missing jobs entirely. Remove once the
+      // real field name is confirmed and the match logic below is fixed.
+      if (page === 1) {
+        console.log("findJobByProjectNumber: first page totalCount/hasMore/pageSize:", {
+          totalCount: body.totalCount,
+          hasMore: body.hasMore,
+          page: body.page,
+          pageSize: body.pageSize,
+          jobsReturned: jobs.length,
+        });
+        console.log("findJobByProjectNumber: first job object (raw, full shape):", JSON.stringify(jobs[0], null, 2));
+      }
+
       const match = jobs.find((job) => job.number?.trim().toLowerCase() === target);
       if (match) {
         return { id: match.id, number: match.number };
