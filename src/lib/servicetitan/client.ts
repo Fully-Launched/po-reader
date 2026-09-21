@@ -46,6 +46,12 @@ interface InventoryLocation {
   [key: string]: unknown;
 }
 
+interface Job {
+  id: number;
+  number?: string;
+  [key: string]: unknown;
+}
+
 export class ServiceTitanClient {
   private environment: string;
   private tenantId: string;
@@ -294,14 +300,83 @@ export class ServiceTitanClient {
   }
 
   /**
-   * TODO: implement once we've confirmed how project numbers map to
-   * ServiceTitan job/project IDs. Will likely call the JPM API's Projects or
-   * Jobs list endpoint and match on a project number field -- exact field
-   * name needs confirming against the client's real data once sample
-   * invoices/tenant access are available.
+   * Look up a ServiceTitan Job by its Job Number, matching the invoice's
+   * extracted project number. Job attachment is now REQUIRED, not
+   * best-effort (CONFIRMED on a client call: Kevin is switching his invoice
+   * PO numbering to use the project number directly as the Job Number going
+   * forward) -- so this must actually work, not just be a stub.
+   *
+   * RESEARCHED with the same rigor as listInventoryLocations()'s warehouse
+   * research: developer.servicetitan.io is a JS-rendered SPA and couldn't be
+   * fetched directly, so this is built from cross-referencing THREE
+   * independent third-party sources rather than a single unverified guess:
+   *   1. A reconstructed OpenAPI spec (github.com/api-evangelist/servicetitan,
+   *      openapi/servicetitan-jobs-api-openapi.yml) shows GET /jobs
+   *      supporting only page/pageSize/modifiedOnOrAfter/jobStatus query
+   *      params -- no job-number or project-number filter. (Its base URL/title
+   *      for this file are clearly mislabeled -- "Accounting Adjustments Jobs
+   *      API" at an /accounting/v2/ base -- an artifact of this generator's
+   *      auto-reconstruction, not to be trusted for the base path.)
+   *   2. An independently-built, actively-maintained open-source ServiceTitan
+   *      CLI (github.com/utkukaynar/Unofficial-ServiceTitan-CLI-MCP,
+   *      src/st_cli/commands/jobs.py, module "jpm") exposes the same limited
+   *      filter set (status, customerId, date range) for `jobs list` -- also
+   *      no number-based filter -- and names the field "number", not
+   *      "jobNumber" as source #1 guessed.
+   *   3. Prismatic's ServiceTitan connector docs (prismatic.io/docs/components/servicetitan)
+   *      confirm the same for both Jobs and Projects: "List Jobs"/"List
+   *      Projects" expose no dedicated job-number/project-number filter
+   *      parameter, only generic custom query params.
+   *
+   * All three independently agree on the same conclusion: there is no
+   * documented server-side way to look up a Job by number. This method
+   * therefore PAGINATES through GET /jpm/v2/tenant/{tenant}/jobs (base path
+   * per source #2's "jpm" module, ServiceTitan's well-known JPM API base) and
+   * matches client-side on job.number -- a real limitation (not a targeted
+   * lookup) given a tenant's jobs list is unbounded. Capped at MAX_PAGES to
+   * avoid a runaway loop; logs a warning and returns null if the cap is hit
+   * without a match rather than looping forever.
+   *
+   * A Job vs. Project distinction is also unresolved: ServiceTitan has a
+   * separate Projects resource with its OWN "number" field (source #1/#3),
+   * and Jobs can belong to a Project -- but neither reconstructed schema
+   * shows a projectId-style link on Job, so this method matches directly
+   * against Job.number, consistent with this function's existing name/
+   * purpose and with PurchaseOrders_Create requiring a jobId (not a
+   * projectId) directly.
+   *
+   * STILL NOT LIVE-VERIFIED. Test against the sandbox tenant before relying
+   * on this in production -- and worth testing an undocumented `?number=`
+   * query param directly against a live call, since ServiceTitan endpoints
+   * sometimes support filters absent from these third-party reconstructions.
    */
-  async findJobByProjectNumber(_projectNumber: string): Promise<{ id: number } | null> {
-    throw new Error("Not implemented -- needs JPM API research, see CLAUDE.md open questions");
+  async findJobByProjectNumber(projectNumber: string): Promise<{ id: number; number?: string } | null> {
+    const MAX_PAGES = 20;
+    const PAGE_SIZE = 100;
+    const target = projectNumber.trim().toLowerCase();
+
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const url = new URL(`${API_BASES[this.environment]}/jpm/v2/tenant/${this.tenantId}/jobs`);
+      url.searchParams.set("page", String(page));
+      url.searchParams.set("pageSize", String(PAGE_SIZE));
+      const resp = await fetch(url, { headers: await this.headers() });
+      if (!resp.ok) {
+        throw new Error(`findJobByProjectNumber failed: ${resp.status} ${await resp.text()}`);
+      }
+      const body = await resp.json();
+      const jobs: Job[] = body.data ?? [];
+      const match = jobs.find((job) => job.number?.trim().toLowerCase() === target);
+      if (match) {
+        return { id: match.id, number: match.number };
+      }
+      if (!body.hasMore) {
+        return null;
+      }
+    }
+    console.warn(
+      `findJobByProjectNumber: gave up after ${MAX_PAGES} pages (${MAX_PAGES * PAGE_SIZE} jobs) without finding a match for "${projectNumber}"`,
+    );
+    return null;
   }
 }
 

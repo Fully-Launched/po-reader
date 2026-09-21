@@ -61,18 +61,34 @@ const PLACEHOLDER_SHIP_DESCRIPTION = "Sandbox test PO";
  */
 const REQUEST_PLACEHOLDER = {};
 
+/**
+ * A single PurchaseOrders_Create `items[]` entry, already resolved to a real
+ * Pricebook skuId. Built by the per-vendor line-item strategy in
+ * `line-item-strategy.ts` -- may or may not correspond 1:1 with
+ * `invoice.lineItems` (vendors using the "bulk consolidation" or "catch-all"
+ * strategy collapse many extracted line items into one or a few of these).
+ */
+export interface PoLineItem {
+  skuId: number;
+  description: string;
+  vendorPartNumber: string;
+  cost: number;
+  quantity: number;
+}
+
 export interface BuildPoPayloadArgs {
   invoice: ExtractedInvoice;
   vendorId: number;
   /**
-   * ServiceTitan job ID, if one was resolved. Most of these invoices are
-   * general inventory/bulk restock purchases that aren't tied to a specific
-   * job -- see CLAUDE.md open questions (pending final confirmation from the
-   * client on whether any of their invoices ARE job-tied). Attach it
-   * best-effort when a project number was extracted and a matching job was
-   * found; omit it otherwise rather than blocking PO creation on it.
+   * ServiceTitan job ID -- REQUIRED, not best-effort. CONFIRMED on a client
+   * call: every PO must now be tied to a specific job via its project
+   * number, since Kevin is switching his invoice PO numbering to use the
+   * project number directly. Resolved via
+   * ServiceTitanClient.findJobByProjectNumber() in /api/create-po, which
+   * fails the request with a clear error if no matching job is found --
+   * see CLAUDE.md's "Business logic" section.
    */
-  jobId?: number;
+  jobId: number;
   businessUnitId: number;
   /**
    * ServiceTitan Inventory Location ID -- REQUIRED top-level field (confirmed
@@ -91,16 +107,14 @@ export interface BuildPoPayloadArgs {
    */
   poTypeId: number;
   /**
-   * Resolved ServiceTitan Pricebook Material skuId for each line item, in
-   * the SAME ORDER as invoice.lineItems -- REQUIRED. ServiceTitan's
-   * PurchaseOrders_Create rejects items[] entries with a 400 unless skuId
-   * references a real Pricebook item; free-text descriptions alone are not
-   * accepted. Resolve these via
-   * ServiceTitanClient.findMaterialSkuIdByDescription() before calling
-   * buildPoPayload() -- this function does no lookups itself, so every
-   * entry here must already be resolved (no nulls).
+   * The PO's items[] entries, already fully resolved (real skuId, no nulls)
+   * -- REQUIRED, and NOT necessarily 1:1 with invoice.lineItems. Built by
+   * buildLineItemsForVendor() in line-item-strategy.ts according to the
+   * invoice's vendor (bulk consolidation, per-item + catch-all, or strict
+   * per-item matching -- see CLAUDE.md's "Business logic" section).
+   * buildPoPayload() does no matching/consolidation itself, only assembly.
    */
-  lineItemSkuIds: number[];
+  items: PoLineItem[];
   /**
    * Date (YYYY-MM-DD) ServiceTitan requires materials by -- REQUIRED
    * top-level field. Genuinely user-editable in the review table (defaults
@@ -117,28 +131,13 @@ export function buildPoPayload({
   businessUnitId,
   inventoryLocationId,
   poTypeId,
-  lineItemSkuIds,
+  items,
   requiredOn,
 }: BuildPoPayloadArgs): Record<string, unknown> {
-  if (lineItemSkuIds.length !== invoice.lineItems.length) {
-    throw new Error(
-      `lineItemSkuIds length (${lineItemSkuIds.length}) does not match invoice.lineItems length (${invoice.lineItems.length})`,
-    );
-  }
-
-  const items = invoice.lineItems.map((item, i) => ({
-    skuId: lineItemSkuIds[i],
-    description: item.description,
-    vendorPartNumber: item.vendorPartNumber ?? "",
-    cost: item.unitPrice,
-    quantity: item.quantity,
-  }));
-
   return {
     vendorId,
-    // Omitted entirely (not sent as null/undefined) when no job was resolved
-    // -- most of these are bulk/inventory purchases with no job to attach.
-    ...(jobId !== undefined ? { jobId } : {}),
+    // No longer optional -- see BuildPoPayloadArgs' jobId doc comment.
+    jobId,
     businessUnitId,
     inventoryLocationId,
     typeId: poTypeId,
@@ -157,9 +156,10 @@ export function buildPoPayload({
 
     // --- Fields added for the second live 400 (see file header) ---
 
-    // These invoices are general inventory/bulk restock purchases with no
-    // job or technician attached (see "Job attachment is optional" in
-    // CLAUDE.md) -- there's no payroll to impact.
+    // Hardcoded false, unchanged by the job-attachment-now-required change
+    // (client call) -- these are material/restock purchases, not technician
+    // labor, so there's no payroll to impact even though a job is now always
+    // attached. See "Job attachment is required" in CLAUDE.md.
     impactsTechnicianPayroll: false,
     // Genuinely user-editable in the review table (see BuildPoPayloadArgs'
     // requiredOn doc comment) -- not computed in here.
@@ -198,7 +198,7 @@ export function reviewWarnings(invoice: ExtractedInvoice): string[] {
     warnings.push("vendor name not confidently matched");
   }
   if (!invoice.projectNumber?.trim()) {
-    warnings.push("no project number found -- expected for bulk/inventory purchases not tied to a job, but worth a glance if this one should be job-tied");
+    warnings.push("no project number found -- REQUIRED to attach a job; this invoice cannot be submitted without one (see hasRequiredFields)");
   }
   if (invoice.lineItems.length === 0) {
     warnings.push("no line items extracted");
@@ -227,13 +227,17 @@ export function isNotAnInvoice(invoice: ExtractedInvoice): boolean {
  * "was this auto-extracted vs. hand-typed" are irrelevant here -- only
  * whether the data needed to create a ServiceTitan PO is present.
  *
- * Project number is deliberately NOT required: most of these invoices are
- * general inventory/bulk restock purchases that aren't tied to a specific
- * job (see CLAUDE.md open questions). Job attachment in /api/create-po is
- * best-effort when a project number IS present, never a submission blocker.
+ * Project number IS now required (changed on a client call): every PO must
+ * be tied to a specific job, since Kevin is switching his invoice PO
+ * numbering to use the project number directly. Without one,
+ * /api/create-po has nothing to look up a job by -- see
+ * ServiceTitanClient.findJobByProjectNumber() and CLAUDE.md's "Business
+ * logic" section. (Previously deliberately NOT required, back when job
+ * attachment was best-effort/optional -- that's no longer the case.)
  */
 export function hasRequiredFields(invoice: ExtractedInvoice): boolean {
   if (!invoice.vendorName.trim()) return false;
+  if (!invoice.projectNumber?.trim()) return false;
   if (invoice.lineItems.length === 0) return false;
   if (invoice.lineItems.some((item) => !item.description.trim() || item.quantity <= 0)) return false;
   return true;

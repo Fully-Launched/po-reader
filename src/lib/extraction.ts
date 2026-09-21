@@ -23,13 +23,14 @@ Call the extract_invoice tool with the data. Extract every line item -- invoices
 30+ line items; do not summarize or omit any.
 
 Field notes:
-- project_number: the job/project number referenced on the invoice, if any. Many of these
-  invoices are general inventory/bulk restock purchases with NO project number at all --
-  that is expected and normal, not a sign of a bad extraction. When one IS present, it's
-  not always a clearly-labeled field: some vendors (e.g. Arco Supply) embed it in a footer
-  line like "Cost to Location: J700.15" rather than a dedicated field -- look at header
-  codes (JOB#, ID#, YOUR#) AND footer/memo lines, not just fields explicitly labeled
-  "project" or "job".
+- project_number: the job/project number referenced on the invoice -- REQUIRED going forward
+  (Kevin is switching his invoice PO numbering to use the project number directly, so every
+  new invoice should carry one). Look hard for it before giving up: it's not always a
+  clearly-labeled field -- some vendors (e.g. Arco Supply) embed it in a footer line like
+  "Cost to Location: J700.15" rather than a dedicated field -- check header codes (JOB#,
+  ID#, YOUR#) AND footer/memo lines, not just fields explicitly labeled "project" or "job".
+  Use null only if you genuinely cannot find one anywhere on the document after a careful
+  look (e.g. an older-format invoice) -- do not fabricate one.
 - vendor_part_number: the VENDOR's own part/SKU code for that line item, if printed (e.g.
   Arco Supply invoices show codes like "301/D" alongside a generic description). This is
   distinct from any ServiceTitan-internal identifier -- just transcribe whatever code the
@@ -41,10 +42,10 @@ Field notes:
   real value: freight_amount 0).
 - If a field is illegible or missing on a genuine invoice, use null (or "" for line item
   description) rather than guessing.
-- Set extraction_confidence to "low" if any line item amount is unclear, or if the
-  invoice clearly references a job/project but you can't pin down the number -- this
-  signals the tool to flag the invoice for human review before submission. A simply
-  ABSENT project number on an otherwise-clear invoice should NOT by itself lower
+- Set extraction_confidence to "low" if any line item amount is unclear, if the invoice
+  clearly references a job/project but you can't pin down the number, OR if you couldn't
+  find a project number at all -- project number is now required for every PO, so a missing
+  one should flag the invoice for a human to double-check, not pass silently at "high"
   confidence.`;
 
 // strict: true guarantees tool_use.input validates exactly against this schema on

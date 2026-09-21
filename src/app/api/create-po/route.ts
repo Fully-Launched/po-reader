@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import type { ExtractedInvoice } from "@/lib/types";
 import { ServiceTitanClient } from "@/lib/servicetitan/client";
 import { buildPoPayload, hasRequiredFields, isNotAnInvoice } from "@/lib/servicetitan/payload-builder";
+import { resolveServiceTitanVendorName } from "@/lib/servicetitan/vendor-remap";
+import { buildLineItemsForVendor } from "@/lib/servicetitan/line-item-strategy";
 
 // Name of the PO Type with "Automatically Receive" enabled. Confirmed to
 // exist as "Supply House Run" in the sandbox -- this is the ONLY way a PO
@@ -72,44 +74,46 @@ export async function POST(req: NextRequest) {
   }
 
   // Defense in depth -- the review table should already disable submission
-  // until these are filled in, but never trust the client alone.
+  // until these are filled in, but never trust the client alone. Includes
+  // project number now (see hasRequiredFields' doc comment) since job
+  // attachment is required below, not best-effort.
   if (!hasRequiredFields(invoice)) {
     return NextResponse.json(
-      { error: "Missing required fields: vendor name and at least one valid line item are required." },
+      { error: "Missing required fields: vendor name, project number, and at least one valid line item are required." },
       { status: 422 },
     );
   }
 
   const client = new ServiceTitanClient();
 
-  const vendor = await client.findVendorByName(invoice.vendorName);
+  // Vendor remapping (e.g. invoice text "Supply House" -> ServiceTitan
+  // vendor "Chase") happens ONLY here, for vendor resolution -- line-item
+  // strategy below matches against the invoice's own vendor text, not this
+  // remapped name. See vendor-remap.ts.
+  const serviceTitanVendorName = resolveServiceTitanVendorName(invoice.vendorName);
+  const vendor = await client.findVendorByName(serviceTitanVendorName);
   if (!vendor) {
     return NextResponse.json(
-      { error: `No ServiceTitan vendor found matching "${invoice.vendorName}"` },
+      { error: `No ServiceTitan vendor found matching "${serviceTitanVendorName}"${serviceTitanVendorName !== invoice.vendorName ? ` (remapped from invoice vendor "${invoice.vendorName}")` : ""}` },
       { status: 422 },
     );
   }
 
-  // Job attachment is best-effort, not required: these invoices are general
-  // inventory/bulk restock purchases, not tied to specific jobs (pending
-  // final confirmation from the client on whether any of their invoices ARE
-  // job-tied -- see CLAUDE.md open questions). If a project number was
-  // extracted, try to resolve a matching job and attach it; if there's no
-  // project number, no match, or the lookup isn't implemented yet
-  // (findJobByProjectNumber currently always throws -- see CLAUDE.md), just
-  // proceed without a job rather than blocking PO creation on it.
-  let jobId: number | undefined;
-  if (invoice.projectNumber) {
-    try {
-      const job = await client.findJobByProjectNumber(invoice.projectNumber);
-      if (job) {
-        jobId = job.id;
-      } else {
-        console.warn(`No ServiceTitan job found for project number "${invoice.projectNumber}" -- proceeding without a job`);
-      }
-    } catch (err) {
-      console.warn(`Job lookup by project number failed or is not implemented -- proceeding without a job:`, err);
-    }
+  // Job attachment is now REQUIRED, not best-effort (CONFIRMED on a client
+  // call -- Kevin is switching his invoice PO numbering to use the project
+  // number directly, so every PO must be tied to a job). hasRequiredFields
+  // above already guarantees invoice.projectNumber is present. A missing
+  // job match is a hard failure, surfaced clearly, not silently skipped --
+  // see ServiceTitanClient.findJobByProjectNumber()'s doc comment for the
+  // research behind this lookup (still not live-verified).
+  const job = await client.findJobByProjectNumber(invoice.projectNumber as string);
+  if (!job) {
+    return NextResponse.json(
+      {
+        error: `No ServiceTitan job found with Job Number "${invoice.projectNumber}". Job attachment is required -- correct the project number in the review table to match an existing ServiceTitan job, or confirm the job exists under a different number.`,
+      },
+      { status: 422 },
+    );
   }
 
   const poTypeId = await client.getPoTypeIdByName(AUTO_RECEIVE_PO_TYPE_NAME);
@@ -120,40 +124,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Each line item needs a real ServiceTitan Pricebook skuId -- PurchaseOrders_Create
-  // rejects free-text-only items with a 400. This is a naive first-pass
-  // description match, not the real matching strategy (see
-  // ServiceTitanClient.findMaterialSkuIdByDescription and the "Line-item ->
-  // pricebook matching" open question in CLAUDE.md). Fail loudly and name
-  // exactly which line items didn't match, rather than guessing a SKU or
-  // silently dropping the item.
-  const lineItemSkuIds: number[] = [];
-  const unmatchedDescriptions: string[] = [];
-  for (const item of invoice.lineItems) {
-    const skuId = await client.findMaterialSkuIdByDescription(item.description);
-    if (skuId === null) {
-      unmatchedDescriptions.push(item.description);
-    } else {
-      lineItemSkuIds.push(skuId);
-    }
-  }
-  if (unmatchedDescriptions.length > 0) {
-    return NextResponse.json(
-      {
-        error: `No matching ServiceTitan Pricebook item found for: ${unmatchedDescriptions.map((d) => `"${d}"`).join(", ")}. Correct the description in the review table to match an existing Pricebook item name, or resolve the line-item-to-pricebook matching strategy (see CLAUDE.md open questions) before this invoice can be submitted.`,
-      },
-      { status: 422 },
-    );
+  // Per-vendor line-item strategy (bulk consolidation for Arco/Supply House,
+  // per-item + catch-all for TEC, strict per-item matching for anything else)
+  // -- see line-item-strategy.ts's file header for the full CONFIRMED
+  // client-call rules. Matches against the invoice's OWN vendor text, not
+  // the ServiceTitan-resolved vendor above.
+  const lineItemsResult = await buildLineItemsForVendor(client, invoice.vendorName, invoice.lineItems);
+  if ("error" in lineItemsResult) {
+    return NextResponse.json({ error: lineItemsResult.error }, { status: 422 });
   }
 
   const payload = buildPoPayload({
     invoice,
     vendorId: vendor.id,
-    jobId,
+    jobId: job.id,
     businessUnitId,
     inventoryLocationId,
     poTypeId,
-    lineItemSkuIds,
+    items: lineItemsResult.items,
     requiredOn,
   });
 

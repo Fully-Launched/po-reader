@@ -234,10 +234,10 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
           />
         </div>
         <div>
-          <label>Project / job number (optional)</label>
+          <label>Project / job number</label>
           <input
             className="mono"
-            placeholder="Leave blank for bulk/inventory purchases"
+            placeholder="Required -- must match an existing ServiceTitan job"
             value={draft.projectNumber ?? ""}
             onChange={(e) => updateField("projectNumber", e.target.value.trim() === "" ? null : e.target.value)}
           />
