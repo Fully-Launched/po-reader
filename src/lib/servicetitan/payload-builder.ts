@@ -39,7 +39,19 @@ import type { ExtractedInvoice } from "../types";
 const SANDBOX_PLACEHOLDER_ADDRESS = {
   name: "Comfort X Design, Inc.",
   street: "510 S Spring Road",
-  unit: null,
+  // Was `null` -- a live 400 reported "shipTo.Address.Unit is required".
+  // Keeping the key lowercase ("unit"), NOT switching to "Unit": the prior
+  // live 400 for this same shipTo object named "shipTo.address"/
+  // "shipTo.description" in lowercase, matching our sent keys exactly, and
+  // those errors cleared once we sent those exact lowercase keys -- direct
+  // evidence ServiceTitan reads this object's keys as we send them, not
+  // PascalCase. ("Address"/"Unit" in the error text most likely reflects
+  // ServiceTitan's internal C# property names in their error-message
+  // formatting, not the expected JSON key.) So `null` failing a
+  // "required" check, not a key mismatch, is the more likely cause --
+  // switched to "" (empty string) since there's no real unit/suite number
+  // for this placeholder. Confirm against the next live response.
+  unit: "",
   city: "Elmhurst",
   state: "IL",
   zip: "60126",
