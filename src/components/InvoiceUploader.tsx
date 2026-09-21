@@ -479,7 +479,7 @@ function BatchInvoiceScreen({
       </div>
 
       {item.status === "loading" && (
-        <div className="dropzone">
+        <div className="status-loading">
           <i className="ti ti-loader-2" />
           <div className="title">Reading invoice {activeIndex + 1} of {queue.length}...</div>
         </div>
