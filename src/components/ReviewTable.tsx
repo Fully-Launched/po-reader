@@ -17,6 +17,13 @@ interface ReviewTableProps {
   submitError: string | null;
 }
 
+interface LineItemMatchSummary {
+  strategy: "catch-all" | "strict";
+  totalItems: number;
+  matchedCount: number;
+  catchAllCount: number;
+}
+
 // Today's date (YYYY-MM-DD) in the browser's local timezone -- requiredOn's
 // default. Deliberately NOT `new Date().toISOString()` (UTC), which can read
 // as the wrong day near local midnight.
@@ -147,6 +154,50 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
   const [requiredOn, setRequiredOn] = useState(todayLocalDate);
   const businessUnit = useIdNameOptions("/api/business-units", "HVAC Service");
   const inventoryLocation = useIdNameOptions("/api/inventory-locations");
+
+  // Pricebook match-count preview for the "X/Y items matched to Pricebook"
+  // indicator below -- calls /api/line-item-match-preview, which runs the
+  // SAME buildLineItemsForVendor() logic /api/create-po uses at submission
+  // time, just to surface counts rather than create a PO. Only meaningful
+  // for vendors whose strategy runs per-item matching (catch-all/strict) --
+  // matchSummary comes back null for bulk-consolidation vendors, and is
+  // rendered as "strategy === catch-all" only (see below) since "strict"'s
+  // only successful outcome is a trivial all-matched case with nothing
+  // useful to report.
+  const [matchSummary, setMatchSummary] = useState<LineItemMatchSummary | null>(null);
+  const [matchSummaryLoading, setMatchSummaryLoading] = useState(false);
+  const [matchSummaryError, setMatchSummaryError] = useState<string | null>(null);
+
+  async function checkLineItemMatches(vendorName: string, lineItems: InvoiceLineItem[]) {
+    setMatchSummaryLoading(true);
+    setMatchSummaryError(null);
+    try {
+      const res = await fetch("/api/line-item-match-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vendorName, lineItems }),
+      });
+      const resBody = await res.json();
+      if (!res.ok) throw new Error(resBody.error ?? `Failed (${res.status})`);
+      setMatchSummary(resBody.matchSummary ?? null);
+      if (!resBody.matchSummary && resBody.error) {
+        setMatchSummaryError(resBody.error);
+      }
+    } catch (err) {
+      setMatchSummaryError(err instanceof Error ? err.message : "Failed to check Pricebook matches");
+    } finally {
+      setMatchSummaryLoading(false);
+    }
+  }
+
+  // Runs once against the as-extracted data on mount -- a manual "Recheck"
+  // button (rendered below) re-runs it against the user's current edits,
+  // rather than re-fetching on every keystroke (expensive: one Pricebook
+  // lookup per line item).
+  useEffect(() => {
+    checkLineItemMatches(invoice.vendorName, invoice.lineItems);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (isNotAnInvoice(draft)) {
     return (
@@ -302,6 +353,37 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
         <button type="button" className="btn-add" onClick={addLineItem}>
           Add line item
         </button>
+
+        {/* Pricebook match-count indicator -- only meaningful for vendors whose
+            strategy actually runs per-item matching against the Pricebook
+            (TEC-style catch-all). Bulk-consolidation vendors (Arco/Supply House)
+            always collapse into one line, so matchSummary is null there and
+            nothing renders; "strict"-strategy matchSummary is also suppressed
+            here since its only successful outcome is a trivial all-matched
+            case with no "added to bulk material" line to report. */}
+        {matchSummaryLoading && (
+          <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>Checking Pricebook matches...</p>
+        )}
+        {!matchSummaryLoading && matchSummary?.strategy === "catch-all" && (
+          <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
+            {matchSummary.matchedCount}/{matchSummary.totalItems} items matched to Pricebook,{" "}
+            {matchSummary.catchAllCount}/{matchSummary.totalItems} added to bulk material
+            {" -- "}
+            <button
+              type="button"
+              className="btn-ghost"
+              style={{ fontSize: 12, padding: 0 }}
+              onClick={() => checkLineItemMatches(draft.vendorName, draft.lineItems)}
+            >
+              Recheck
+            </button>
+          </p>
+        )}
+        {!matchSummaryLoading && matchSummaryError && (
+          <p role="alert" style={{ fontSize: 12, color: "var(--red-text)", marginTop: 10 }}>
+            Couldn&apos;t check Pricebook matches: {matchSummaryError}
+          </p>
+        )}
       </div>
 
       <div className="card grid-2">

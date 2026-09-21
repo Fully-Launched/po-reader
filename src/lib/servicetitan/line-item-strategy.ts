@@ -51,7 +51,26 @@ function sumTotals(items: InvoiceLineItem[]): number {
   return items.reduce((sum, item) => sum + item.total, 0);
 }
 
-export type BuildLineItemsResult = { items: PoLineItem[] } | { error: string };
+/**
+ * Per-item match counts, for surfacing a "X/Y items matched to Pricebook"
+ * indicator in the review table -- NOT applicable to bulk-consolidation
+ * (there's no per-item matching to report on), so buildLineItemsForVendor()
+ * returns `null` for that strategy rather than an all-zero/misleading
+ * summary. "strict" gets one too since it also runs per-item matching, even
+ * though its only successful outcome is catchAllCount: 0 (any unmatched item
+ * fails the whole call instead of falling into a bucket -- see the strict
+ * branch below).
+ */
+export interface LineItemMatchSummary {
+  strategy: "catch-all" | "strict";
+  totalItems: number;
+  matchedCount: number;
+  catchAllCount: number;
+}
+
+export type BuildLineItemsResult =
+  | { items: PoLineItem[]; matchSummary: LineItemMatchSummary | null }
+  | { error: string };
 
 /**
  * Builds the PurchaseOrders_Create items[] array for an invoice according to
@@ -87,6 +106,7 @@ export async function buildLineItemsForVendor(
           quantity: 1,
         },
       ],
+      matchSummary: null,
     };
   }
 
@@ -122,7 +142,15 @@ export async function buildLineItemsForVendor(
         quantity: 1,
       });
     }
-    return { items: matchedItems };
+    return {
+      items: matchedItems,
+      matchSummary: {
+        strategy: "catch-all",
+        totalItems: lineItems.length,
+        matchedCount: lineItems.length - unmatchedItems.length,
+        catchAllCount: unmatchedItems.length,
+      },
+    };
   }
 
   // strict: original behavior, unchanged -- every line item must individually
@@ -149,5 +177,8 @@ export async function buildLineItemsForVendor(
       error: `No matching ServiceTitan Pricebook item found for: ${unmatchedDescriptions.map((d) => `"${d}"`).join(", ")}. Correct the description in the review table to match an existing Pricebook item name, or confirm "${invoiceVendorName}" should use one of the known per-vendor strategies (see CLAUDE.md "Business logic") before this invoice can be submitted.`,
     };
   }
-  return { items };
+  return {
+    items,
+    matchSummary: { strategy: "strict", totalItems: lineItems.length, matchedCount: items.length, catchAllCount: 0 },
+  };
 }
