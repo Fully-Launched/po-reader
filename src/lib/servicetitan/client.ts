@@ -104,13 +104,22 @@ export class ServiceTitanClient {
    */
   async createPurchaseOrder(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     const url = `${API_BASES[this.environment]}/inventory/v2/tenant/${this.tenantId}/purchase-orders`;
+    const body = JSON.stringify(payload);
+    // Logged unconditionally while shipTo/shipping/request are still being
+    // pinned down against live 400s -- gives the exact bytes ServiceTitan
+    // received, not just the JS object, so a failure can be diagnosed against
+    // the real request rather than a guess. Revisit once the payload shape is
+    // confirmed stable.
+    console.log(`PurchaseOrders_Create request body (${body.length} chars):`, body);
     const resp = await fetch(url, {
       method: "POST",
       headers: await this.headers(),
-      body: JSON.stringify(payload),
+      body,
     });
     if (!resp.ok) {
-      throw new Error(`PurchaseOrders_Create failed: ${resp.status} ${await resp.text()}`);
+      const errorText = await resp.text();
+      console.error(`PurchaseOrders_Create failed: ${resp.status}`, errorText);
+      throw new Error(`PurchaseOrders_Create failed: ${resp.status} ${errorText}`);
     }
     return resp.json();
   }
