@@ -259,6 +259,17 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
     idFilled(inventoryLocation.selectedId) &&
     requiredOn.trim() !== "";
 
+  // Proactive red-border state, mirroring hasRequiredFields()'s checks --
+  // shown as soon as the screen loads with a required field empty, not only
+  // after a failed submission attempt. `submitError?.field` is ALSO checked
+  // here (not just the empty-value case) since a server-side failure can
+  // fire on a NON-empty value the client can't validate itself (e.g. a
+  // vendor name that's present but doesn't match any ServiceTitan vendor,
+  // or a project number that's present but matches no job).
+  const vendorNameInvalid = !draft.vendorName.trim() || submitError?.field === "vendorName";
+  const projectNumberInvalid = !draft.projectNumber?.trim() || submitError?.field === "projectNumber";
+  const invalidFieldStyle = (invalid: boolean) => (invalid ? { borderColor: "var(--red-text)" } : undefined);
+
   function updateField<K extends keyof ExtractedInvoice>(key: K, value: ExtractedInvoice[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
   }
@@ -297,8 +308,8 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
             placeholder="Enter vendor name"
             value={draft.vendorName}
             onChange={(e) => updateField("vendorName", e.target.value)}
-            aria-invalid={submitError?.field === "vendorName"}
-            style={submitError?.field === "vendorName" ? { borderColor: "var(--red-text)" } : undefined}
+            aria-invalid={vendorNameInvalid}
+            style={invalidFieldStyle(vendorNameInvalid)}
           />
         </div>
         <div>
@@ -326,8 +337,8 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
             placeholder="Required -- must match an existing ServiceTitan job"
             value={draft.projectNumber ?? ""}
             onChange={(e) => updateField("projectNumber", e.target.value.trim() === "" ? null : e.target.value)}
-            aria-invalid={submitError?.field === "projectNumber"}
-            style={submitError?.field === "projectNumber" ? { borderColor: "var(--red-text)" } : undefined}
+            aria-invalid={projectNumberInvalid}
+            style={invalidFieldStyle(projectNumberInvalid)}
           />
         </div>
       </div>
@@ -360,6 +371,8 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
                 placeholder="Item description"
                 value={item.description}
                 onChange={(e) => updateLineItem(i, "description", e.target.value)}
+                aria-invalid={!item.description.trim()}
+                style={invalidFieldStyle(!item.description.trim())}
               />
               <input
                 placeholder="If any"
@@ -371,6 +384,8 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
                 type="number"
                 value={item.quantity}
                 onChange={(e) => updateLineItem(i, "quantity", Number(e.target.value))}
+                aria-invalid={item.quantity <= 0}
+                style={invalidFieldStyle(item.quantity <= 0)}
               />
               <input
                 className="mono"

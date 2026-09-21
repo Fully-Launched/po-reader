@@ -182,35 +182,29 @@ export function buildPoPayload({
 }
 
 /**
- * Human-readable reasons this invoice is worth a second look before
- * submitting -- shown as a warning banner in the review table, but does NOT
- * block submission. Low confidence / missing fields are expected outcomes of
- * extraction on a messy real-world invoice; the fix is letting the user
- * correct the draft, not refusing to show it. Only isNotAnInvoice() and
- * hasRequiredFields() below are actual submission gates.
+ * Human-readable line-item extraction accuracy concerns -- shown as a
+ * warning banner in the review table, but does NOT block submission.
+ *
+ * CONFIRMED on a client call: this banner should cover ONLY line-item
+ * extraction accuracy, nothing else. Other issues this used to mention
+ * (missing vendor name, missing project number, no line items, generic
+ * whole-document extraction confidence) are deliberately NOT here anymore --
+ * they're either already surfaced as a red-bordered required field the user
+ * can't miss (see ReviewTable.tsx's proactive invalid-field styling, keyed
+ * off hasRequiredFields()' own checks), or not worth a banner mention if
+ * they're fine. Keeping this list to ONE concern keeps the banner itself
+ * short (1-2 bullets), not a paragraph of reasoning.
  */
 export function reviewWarnings(invoice: ExtractedInvoice): string[] {
   const warnings: string[] = [];
-  if (invoice.extractionConfidence !== "high") {
-    warnings.push(`extraction confidence is "${invoice.extractionConfidence}"`);
-  }
-  if (!invoice.vendorName.trim()) {
-    warnings.push("vendor name not confidently matched");
-  }
-  if (!invoice.projectNumber?.trim()) {
-    warnings.push("no project number found -- REQUIRED to attach a job; this invoice cannot be submitted without one (see hasRequiredFields)");
-  }
-  if (invoice.lineItems.length === 0) {
-    warnings.push("no line items extracted");
-  }
   // Per-item flag, distinct from the whole-document extractionConfidence
-  // check above -- surfaces which SPECIFIC line items Claude itself wasn't
-  // confident about (see InvoiceLineItem.lowConfidence), not just a general
-  // "something about this invoice might be off" signal.
+  // field (still recorded on ExtractedInvoice, just no longer surfaced
+  // here) -- flags which SPECIFIC line items Claude itself wasn't confident
+  // about (see InvoiceLineItem.lowConfidence).
   const lowConfidenceCount = invoice.lineItems.filter((item) => item.lowConfidence).length;
   if (lowConfidenceCount > 0) {
     warnings.push(
-      `${lowConfidenceCount} line item${lowConfidenceCount === 1 ? "" : "s"} may not have been read accurately -- verify quantities/prices against the original PDF before submitting`,
+      `${lowConfidenceCount} line item${lowConfidenceCount === 1 ? "" : "s"} may not have been read accurately -- verify against the original PDF`,
     );
   }
   return warnings;
