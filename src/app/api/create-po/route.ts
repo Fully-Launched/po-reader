@@ -4,6 +4,18 @@ import { ServiceTitanClient } from "@/lib/servicetitan/client";
 import { buildPoPayload, hasRequiredFields, isNotAnInvoice } from "@/lib/servicetitan/payload-builder";
 import { resolveServiceTitanVendorName } from "@/lib/servicetitan/vendor-remap";
 import { buildLineItemsForVendor } from "@/lib/servicetitan/line-item-strategy";
+import { notFoundError, upstreamFailureError } from "@/lib/error-messages";
+
+// Field names below match the review table's own field identifiers, so the
+// frontend can highlight exactly which input caused a submission failure
+// (e.g. a red border on Project/job number when the job lookup fails)
+// instead of only showing a generic banner -- see ReviewTable.tsx and
+// InvoiceUploader.tsx's submitError state shape.
+type ReviewTableField = "vendorName" | "projectNumber";
+
+function errorResponse(error: string, status: number, field?: ReviewTableField) {
+  return NextResponse.json({ error, field }, { status });
+}
 
 // Name of the PO Type with "Automatically Receive" enabled. Confirmed to
 // exist as "Supply House Run" in the sandbox -- this is the ONLY way a PO
@@ -55,9 +67,9 @@ export async function POST(req: NextRequest) {
     typeof inventoryLocationId !== "number" ||
     typeof requiredOn !== "string"
   ) {
-    return NextResponse.json(
-      { error: "Request body must include 'invoice', 'businessUnitId', 'inventoryLocationId', and 'requiredOn'" },
-      { status: 400 },
+    return errorResponse(
+      "Request body must include 'invoice', 'businessUnitId', 'inventoryLocationId', and 'requiredOn'.",
+      400,
     );
   }
 
@@ -67,9 +79,9 @@ export async function POST(req: NextRequest) {
   // user correct those before submission, and hasRequiredFields (below) is
   // the real gate on that corrected data.
   if (isNotAnInvoice(invoice)) {
-    return NextResponse.json(
-      { error: "This document does not appear to be a vendor invoice -- nothing to submit." },
-      { status: 422 },
+    return errorResponse(
+      "This document doesn't appear to be a vendor invoice, so there's nothing to review or submit. Upload the correct invoice PDF and try again.",
+      422,
     );
   }
 
@@ -78,9 +90,9 @@ export async function POST(req: NextRequest) {
   // project number now (see hasRequiredFields' doc comment) since job
   // attachment is required below, not best-effort.
   if (!hasRequiredFields(invoice)) {
-    return NextResponse.json(
-      { error: "Missing required fields: vendor name, project number, and at least one valid line item are required." },
-      { status: 422 },
+    return errorResponse(
+      "Missing required fields -- vendor name, project number, and at least one valid line item are all required. Correct these in the review table before submitting.",
+      422,
     );
   }
 
@@ -93,9 +105,15 @@ export async function POST(req: NextRequest) {
   const serviceTitanVendorName = resolveServiceTitanVendorName(invoice.vendorName);
   const vendor = await client.findVendorByName(serviceTitanVendorName);
   if (!vendor) {
-    return NextResponse.json(
-      { error: `No ServiceTitan vendor found matching "${serviceTitanVendorName}"${serviceTitanVendorName !== invoice.vendorName ? ` (remapped from invoice vendor "${invoice.vendorName}")` : ""}` },
-      { status: 422 },
+    return errorResponse(
+      notFoundError(
+        "vendor",
+        serviceTitanVendorName,
+        "correct the vendor name in the review table to match an existing ServiceTitan vendor.",
+        serviceTitanVendorName !== invoice.vendorName ? `remapped from invoice vendor "${invoice.vendorName}"` : undefined,
+      ),
+      422,
+      "vendorName",
     );
   }
 
@@ -108,19 +126,24 @@ export async function POST(req: NextRequest) {
   // research behind this lookup (still not live-verified).
   const job = await client.findJobByProjectNumber(invoice.projectNumber as string);
   if (!job) {
-    return NextResponse.json(
-      {
-        error: `No ServiceTitan job found with Job Number "${invoice.projectNumber}". Job attachment is required -- correct the project number in the review table to match an existing ServiceTitan job, or confirm the job exists under a different number.`,
-      },
-      { status: 422 },
+    // Reference example for this app's error-message style -- see
+    // src/lib/error-messages.ts's style guide.
+    return errorResponse(
+      `No ServiceTitan job found with Job Number "${invoice.projectNumber}". Job attachment is required -- correct the project number in the review table to match an existing ServiceTitan job, or confirm the job exists under a different number.`,
+      422,
+      "projectNumber",
     );
   }
 
   const poTypeId = await client.getPoTypeIdByName(AUTO_RECEIVE_PO_TYPE_NAME);
   if (!poTypeId) {
-    return NextResponse.json(
-      { error: `No PO Type named "${AUTO_RECEIVE_PO_TYPE_NAME}" found -- without an Automatically-Receive PO Type, the PO cannot be auto-received` },
-      { status: 422 },
+    return errorResponse(
+      notFoundError(
+        "PO Type",
+        AUTO_RECEIVE_PO_TYPE_NAME,
+        "confirm this PO Type exists in ServiceTitan, or contact support if it's been renamed -- without an Automatically-Receive PO Type, the purchase order can't be created.",
+      ),
+      422,
     );
   }
 
@@ -131,7 +154,7 @@ export async function POST(req: NextRequest) {
   // the ServiceTitan-resolved vendor above.
   const lineItemsResult = await buildLineItemsForVendor(client, invoice.vendorName, invoice.lineItems);
   if ("error" in lineItemsResult) {
-    return NextResponse.json({ error: lineItemsResult.error }, { status: 422 });
+    return errorResponse(lineItemsResult.error, 422);
   }
 
   const payload = buildPoPayload({
@@ -150,6 +173,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result);
   } catch (err) {
     console.error("PurchaseOrders_Create failed:", err);
-    return NextResponse.json({ error: "Failed to create purchase order in ServiceTitan" }, { status: 502 });
+    return errorResponse(upstreamFailureError("create the purchase order in ServiceTitan"), 502);
   }
 }

@@ -31,6 +31,7 @@
 import type { InvoiceLineItem } from "../types";
 import type { PoLineItem } from "./payload-builder";
 import type { ServiceTitanClient } from "./client";
+import { notFoundError } from "../error-messages";
 
 export const BULK_ROUGH_MATERIAL_DESCRIPTION = "Bulk Rough Material";
 export const BULK_EQUIPMENT_MATERIAL_DESCRIPTION = "Bulk Equipment Material";
@@ -93,7 +94,12 @@ export async function buildLineItemsForVendor(
     const skuId = await client.findMaterialSkuIdByDescription(BULK_ROUGH_MATERIAL_DESCRIPTION);
     if (skuId === null) {
       return {
-        error: `No ServiceTitan Pricebook item found matching "${BULK_ROUGH_MATERIAL_DESCRIPTION}" -- this catch-all Pricebook item must exist for "${invoiceVendorName}" invoices (bulk-consolidation vendors never match individual line items).`,
+        error: notFoundError(
+          "Pricebook item",
+          BULK_ROUGH_MATERIAL_DESCRIPTION,
+          `add "${BULK_ROUGH_MATERIAL_DESCRIPTION}" as a Pricebook Material in ServiceTitan, then try again.`,
+          `required for "${invoiceVendorName}" invoices`,
+        ),
       };
     }
     return {
@@ -131,7 +137,12 @@ export async function buildLineItemsForVendor(
       const catchAllSkuId = await client.findMaterialSkuIdByDescription(BULK_EQUIPMENT_MATERIAL_DESCRIPTION);
       if (catchAllSkuId === null) {
         return {
-          error: `No ServiceTitan Pricebook item found matching "${BULK_EQUIPMENT_MATERIAL_DESCRIPTION}" -- this catch-all Pricebook item must exist for "${invoiceVendorName}" invoices to absorb unmatched line items.`,
+          error: notFoundError(
+            "Pricebook item",
+            BULK_EQUIPMENT_MATERIAL_DESCRIPTION,
+            `add "${BULK_EQUIPMENT_MATERIAL_DESCRIPTION}" as a Pricebook Material in ServiceTitan, then try again.`,
+            `required to absorb unmatched line items on "${invoiceVendorName}" invoices`,
+          ),
         };
       }
       matchedItems.push({
@@ -174,7 +185,7 @@ export async function buildLineItemsForVendor(
   }
   if (unmatchedDescriptions.length > 0) {
     return {
-      error: `No matching ServiceTitan Pricebook item found for: ${unmatchedDescriptions.map((d) => `"${d}"`).join(", ")}. Correct the description in the review table to match an existing Pricebook item name, or confirm "${invoiceVendorName}" should use one of the known per-vendor strategies (see CLAUDE.md "Business logic") before this invoice can be submitted.`,
+      error: `Some line items don't match any ServiceTitan Pricebook item: ${unmatchedDescriptions.map((d) => `"${d}"`).join(", ")} -- correct these descriptions in the review table to match existing Pricebook item names, then try again.`,
     };
   }
   return {

@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import type { ExtractedInvoice } from "@/lib/types";
-import { ReviewTable } from "./ReviewTable";
+import { ReviewTable, type SubmitError } from "./ReviewTable";
 
 // Top-level app shell, layout ported from po-generator-draft.html (design
 // mockup): nav-rail + tabs + branded header + one of three screens +
@@ -36,7 +36,7 @@ export function InvoiceUploader() {
   const [extractedInvoice, setExtractedInvoice] = useState<ExtractedInvoice | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<SubmitError | null>(null);
 
   const [submittedInvoice, setSubmittedInvoice] = useState<ExtractedInvoice | null>(null);
   const [poResult, setPoResult] = useState<Record<string, unknown> | null>(null);
@@ -77,7 +77,7 @@ export function InvoiceUploader() {
       if (thisRequest !== requestId.current) return; // superseded by a newer request
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `Extraction failed (${res.status})`);
+        throw new Error(body.error ?? `Extraction failed (${res.status}) -- try again in a moment, or contact support if this persists.`);
       }
       const extracted: ExtractedInvoice = await res.json();
       if (thisRequest !== requestId.current) return;
@@ -86,7 +86,7 @@ export function InvoiceUploader() {
       setTab("edit");
     } catch (err) {
       if (thisRequest !== requestId.current) return;
-      setExtractError(err instanceof Error ? err.message : "Extraction failed");
+      setExtractError(err instanceof Error ? err.message : "Extraction failed -- try again in a moment, or contact support if this persists.");
       setExtracting(false);
     }
   }
@@ -108,16 +108,22 @@ export function InvoiceUploader() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(body.error ?? `PO creation failed (${res.status})`);
+        // Stay on the review screen with the user's edits intact -- don't
+        // discard the draft on a failed submission. `body.field`, when
+        // present, names the specific input that caused the failure (e.g.
+        // "projectNumber" for a job-not-found error) so the review table can
+        // highlight that exact field -- see ReviewTable.tsx's SubmitError
+        // type and per-field styling.
+        setSubmitError({ message: body.error ?? `PO creation failed (${res.status}). Try again in a moment, or contact support if this persists.`, field: body.field });
+        setSubmitting(false);
+        return;
       }
       setSubmittedInvoice(invoice);
       setPoResult(body);
       setSubmitting(false);
       setTab("confirm");
-    } catch (err) {
-      // Stay on the review screen with the user's edits intact -- don't
-      // discard the draft on a failed submission.
-      setSubmitError(err instanceof Error ? err.message : "PO creation failed");
+    } catch {
+      setSubmitError({ message: "PO creation failed -- try again in a moment, or contact support if this persists." });
       setSubmitting(false);
     }
   }

@@ -4,6 +4,17 @@ import { useEffect, useState } from "react";
 import type { ExtractedInvoice, InvoiceLineItem } from "@/lib/types";
 import { reviewWarnings, hasRequiredFields, isNotAnInvoice } from "@/lib/servicetitan/payload-builder";
 
+/**
+ * A submission failure from /api/create-po. `field`, when the API named a
+ * specific input as the cause (see error-messages.ts's style guide and
+ * route.ts's ReviewTableField), lets this screen put a red border on that
+ * exact field instead of only showing the message in the banner below.
+ */
+export interface SubmitError {
+  message: string;
+  field?: "vendorName" | "projectNumber";
+}
+
 interface ReviewTableProps {
   invoice: ExtractedInvoice;
   onConfirm: (
@@ -14,7 +25,7 @@ interface ReviewTableProps {
   ) => void;
   onCancel: () => void;
   submitting: boolean;
-  submitError: string | null;
+  submitError: SubmitError | null;
 }
 
 interface LineItemMatchSummary {
@@ -41,7 +52,7 @@ function todayLocalDate(): string {
 // An optional defaultName pre-selects a preferred option by name when
 // present (e.g. Business Unit defaulting to "HVAC Service") -- the
 // dropdown still renders fully editable either way.
-function useIdNameOptions(url: string, defaultName?: string) {
+function useIdNameOptions(url: string, resourceLabel: string, defaultName?: string) {
   const [options, setOptions] = useState<{ id: number; name: string }[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState("");
@@ -50,7 +61,12 @@ function useIdNameOptions(url: string, defaultName?: string) {
     let cancelled = false;
     fetch(url)
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `Failed (${res.status})`);
+        if (!res.ok) {
+          throw new Error(
+            (await res.json().catch(() => ({}))).error ??
+              `Failed to load ${resourceLabel} (${res.status}) -- try again in a moment, or contact support if this persists.`,
+          );
+        }
         return res.json() as Promise<{ id: number; name: string }[]>;
       })
       .then((result) => {
@@ -69,12 +85,16 @@ function useIdNameOptions(url: string, defaultName?: string) {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : `Failed to load from ${url}`);
+        setError(
+          err instanceof Error
+            ? err.message
+            : `Failed to load ${resourceLabel} -- try again in a moment, or contact support if this persists.`,
+        );
       });
     return () => {
       cancelled = true;
     };
-  }, [url, defaultName]);
+  }, [url, resourceLabel, defaultName]);
 
   return { options, error, selectedId, setSelectedId };
 }
@@ -127,7 +147,14 @@ function IdNameSelect({ label, options, error, selectedId, onChange, emptyMessag
   );
 }
 
-const EMPTY_LINE_ITEM: InvoiceLineItem = { description: "", quantity: 1, unitPrice: 0, total: 0, vendorPartNumber: null };
+const EMPTY_LINE_ITEM: InvoiceLineItem = {
+  description: "",
+  quantity: 1,
+  unitPrice: 0,
+  total: 0,
+  vendorPartNumber: null,
+  lowConfidence: false,
+};
 const VISIBLE_LINE_ITEM_LIMIT = 3; // matches the "+N more line items" treatment in the mockup
 
 // "Review invoice" screen shown between extraction and submission. This is
@@ -152,8 +179,8 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
   // value. Plain <input type="date"> imposes no min/max, so past dates are
   // selectable.
   const [requiredOn, setRequiredOn] = useState(todayLocalDate);
-  const businessUnit = useIdNameOptions("/api/business-units", "HVAC Service");
-  const inventoryLocation = useIdNameOptions("/api/inventory-locations");
+  const businessUnit = useIdNameOptions("/api/business-units", "Business Units", "HVAC Service");
+  const inventoryLocation = useIdNameOptions("/api/inventory-locations", "Inventory Locations");
 
   // Pricebook match-count preview for the "X/Y items matched to Pricebook"
   // indicator below -- calls /api/line-item-match-preview, which runs the
@@ -178,13 +205,19 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
         body: JSON.stringify({ vendorName, lineItems }),
       });
       const resBody = await res.json();
-      if (!res.ok) throw new Error(resBody.error ?? `Failed (${res.status})`);
+      if (!res.ok) {
+        throw new Error(resBody.error ?? `Failed to check Pricebook matches (${res.status}) -- try again in a moment, or contact support if this persists.`);
+      }
       setMatchSummary(resBody.matchSummary ?? null);
       if (!resBody.matchSummary && resBody.error) {
         setMatchSummaryError(resBody.error);
       }
     } catch (err) {
-      setMatchSummaryError(err instanceof Error ? err.message : "Failed to check Pricebook matches");
+      setMatchSummaryError(
+        err instanceof Error
+          ? err.message
+          : "Failed to check Pricebook matches -- try again in a moment, or contact support if this persists.",
+      );
     } finally {
       setMatchSummaryLoading(false);
     }
@@ -207,8 +240,8 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
         </div>
         <div className="confirm-title">Not a vendor invoice</div>
         <div className="confirm-sub">
-          This document doesn&apos;t appear to be a vendor invoice{draft.notes ? ` -- ${draft.notes}` : ""}. There&apos;s
-          nothing to review or submit.
+          This document doesn&apos;t appear to be a vendor invoice{draft.notes ? ` -- ${draft.notes}` : ""}, so
+          there&apos;s nothing to review or submit.
         </div>
         <button type="button" className="btn-secondary" onClick={onCancel}>
           Choose a different file
@@ -264,6 +297,8 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
             placeholder="Enter vendor name"
             value={draft.vendorName}
             onChange={(e) => updateField("vendorName", e.target.value)}
+            aria-invalid={submitError?.field === "vendorName"}
+            style={submitError?.field === "vendorName" ? { borderColor: "var(--red-text)" } : undefined}
           />
         </div>
         <div>
@@ -291,6 +326,8 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
             placeholder="Required -- must match an existing ServiceTitan job"
             value={draft.projectNumber ?? ""}
             onChange={(e) => updateField("projectNumber", e.target.value.trim() === "" ? null : e.target.value)}
+            aria-invalid={submitError?.field === "projectNumber"}
+            style={submitError?.field === "projectNumber" ? { borderColor: "var(--red-text)" } : undefined}
           />
         </div>
       </div>
@@ -308,7 +345,17 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
         {visibleLineItems.map((item) => {
           const i = draft.lineItems.indexOf(item);
           return (
-            <div className="line-item-row" key={i}>
+            <div
+              className="line-item-row"
+              key={i}
+              // Per-item low-confidence flag from extraction (distinct from
+              // the whole-document extractionConfidence banner) -- amber
+              // left border puts the user's eye on exactly which row to
+              // double-check against the source PDF, not just a generic
+              // warning banner with no row-level indication.
+              style={item.lowConfidence ? { borderLeft: "3px solid var(--amber-text)", paddingLeft: 6 } : undefined}
+              title={item.lowConfidence ? "Low extraction confidence -- verify against the original PDF" : undefined}
+            >
               <input
                 placeholder="Item description"
                 value={item.description}
@@ -484,7 +531,7 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
       {submitError && (
         <div className="banner banner-error">
           <i className="ti ti-alert-circle" />
-          {submitError}
+          {submitError.message}
         </div>
       )}
 

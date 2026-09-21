@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ServiceTitanClient } from "@/lib/servicetitan/client";
+import { upstreamFailureError } from "@/lib/error-messages";
 
 // GET /api/inventory-locations
 // Lists ServiceTitan Inventory Locations for the review table's Inventory
@@ -12,6 +13,6 @@ export async function GET() {
     return NextResponse.json(locations.map((loc) => ({ id: loc.id, name: loc.name })));
   } catch (err) {
     console.error("Failed to list ServiceTitan inventory locations:", err);
-    return NextResponse.json({ error: "Failed to list inventory locations" }, { status: 502 });
+    return NextResponse.json({ error: upstreamFailureError("list Inventory Locations from ServiceTitan") }, { status: 502 });
   }
 }

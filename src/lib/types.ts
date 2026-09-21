@@ -22,6 +22,17 @@ export interface InvoiceLineItem {
    * looked up separately (see ServiceTitanClient.findMaterialSkuIdByDescription).
    */
   vendorPartNumber: string | null;
+  /**
+   * True when Claude was specifically unsure about THIS item's own
+   * quantity/price/description during extraction -- distinct from
+   * ExtractedInvoice.extractionConfidence, which is a single whole-document
+   * rating. Lets the review table flag exactly which row(s) need a second
+   * look against the source PDF, rather than a blanket "confidence is low"
+   * banner with no indication of where. See reviewWarnings() in
+   * src/lib/servicetitan/payload-builder.ts and ReviewTable.tsx's per-row
+   * styling.
+   */
+  lowConfidence: boolean;
 }
 
 export type ExtractionConfidence = "high" | "medium" | "low";

@@ -203,6 +203,16 @@ export function reviewWarnings(invoice: ExtractedInvoice): string[] {
   if (invoice.lineItems.length === 0) {
     warnings.push("no line items extracted");
   }
+  // Per-item flag, distinct from the whole-document extractionConfidence
+  // check above -- surfaces which SPECIFIC line items Claude itself wasn't
+  // confident about (see InvoiceLineItem.lowConfidence), not just a general
+  // "something about this invoice might be off" signal.
+  const lowConfidenceCount = invoice.lineItems.filter((item) => item.lowConfidence).length;
+  if (lowConfidenceCount > 0) {
+    warnings.push(
+      `${lowConfidenceCount} line item${lowConfidenceCount === 1 ? "" : "s"} may not have been read accurately -- verify quantities/prices against the original PDF before submitting`,
+    );
+  }
   return warnings;
 }
 

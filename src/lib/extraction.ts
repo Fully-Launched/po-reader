@@ -35,6 +35,14 @@ Field notes:
   Arco Supply invoices show codes like "301/D" alongside a generic description). This is
   distinct from any ServiceTitan-internal identifier -- just transcribe whatever code the
   vendor printed. Use null if the line item has no separate part number field.
+- low_confidence (per line item): set true when YOU specifically aren't confident about
+  THIS item's own quantity, unit price, or description -- e.g. the print is smudged/faint,
+  a digit is ambiguous (could be a 3 or an 8), the row is cut off, or you had to guess
+  between two plausible readings. This is separate from the whole-document
+  extraction_confidence below -- most line items on an otherwise-clear invoice should be
+  low_confidence: false even if extraction_confidence for the document is "medium" for an
+  unrelated reason (e.g. a missing project number). Don't set this defensively on every
+  item "just in case" -- only when a specific reading was genuinely uncertain.
 - freight_amount: the invoice's own freight/shipping charge, if it has one (e.g. Arco Supply
   invoices carry a "FREIGHT: 0.00" line near the totals). This is usually zero but not
   always -- extract the actual printed value, don't assume it's zero. Use null only if the
@@ -76,8 +84,12 @@ const EXTRACT_INVOICE_TOOL: Anthropic.Tool = {
             unit_price: { type: "number" },
             total: { type: "number" },
             vendor_part_number: { type: ["string", "null"] },
+            low_confidence: {
+              type: "boolean",
+              description: "true if this specific item's quantity/price/description reading was uncertain",
+            },
           },
-          required: ["description", "quantity", "unit_price", "total", "vendor_part_number"],
+          required: ["description", "quantity", "unit_price", "total", "vendor_part_number", "low_confidence"],
           additionalProperties: false,
         },
       },
@@ -118,6 +130,7 @@ interface RawExtraction {
     unit_price: number;
     total: number;
     vendor_part_number: string | null;
+    low_confidence: boolean;
   }[];
   tax_amount: number | null;
   freight_amount: number | null;
@@ -140,6 +153,7 @@ function toExtractedInvoice(raw: RawExtraction): ExtractedInvoice {
       unitPrice: item.unit_price,
       total: item.total,
       vendorPartNumber: item.vendor_part_number,
+      lowConfidence: item.low_confidence,
     })),
     taxAmount: raw.tax_amount,
     freightAmount: raw.freight_amount,

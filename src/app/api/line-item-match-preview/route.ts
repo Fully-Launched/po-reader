@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { InvoiceLineItem } from "@/lib/types";
 import { ServiceTitanClient } from "@/lib/servicetitan/client";
 import { buildLineItemsForVendor } from "@/lib/servicetitan/line-item-strategy";
+import { upstreamFailureError } from "@/lib/error-messages";
 
 interface PreviewRequestBody {
   vendorName: string;
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest) {
 
   if (typeof vendorName !== "string" || !Array.isArray(lineItems)) {
     return NextResponse.json(
-      { error: "Request body must include 'vendorName' and 'lineItems'" },
+      { error: "Request body must include 'vendorName' and 'lineItems'." },
       { status: 400 },
     );
   }
@@ -40,6 +41,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ matchSummary: result.matchSummary });
   } catch (err) {
     console.error("Failed to compute line-item match preview:", err);
-    return NextResponse.json({ error: "Failed to compute Pricebook match preview" }, { status: 502 });
+    return NextResponse.json({ error: upstreamFailureError("check Pricebook matches") }, { status: 502 });
   }
 }

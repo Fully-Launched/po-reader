@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ServiceTitanClient } from "@/lib/servicetitan/client";
+import { upstreamFailureError } from "@/lib/error-messages";
 
 // GET /api/business-units
 // Lists ServiceTitan Business Units for the review table's Business Unit
@@ -13,6 +14,6 @@ export async function GET() {
     return NextResponse.json(businessUnits.map((bu) => ({ id: bu.id, name: bu.name })));
   } catch (err) {
     console.error("Failed to list ServiceTitan business units:", err);
-    return NextResponse.json({ error: "Failed to list business units" }, { status: 502 });
+    return NextResponse.json({ error: upstreamFailureError("list Business Units from ServiceTitan") }, { status: 502 });
   }
 }
