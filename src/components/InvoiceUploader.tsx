@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import type { ExtractedInvoice, InvoiceBoundary } from "@/lib/types";
-import { ReviewTable, type SubmitError } from "./ReviewTable";
+import { ReviewTable, type ReviewTableProps, type SubmitError } from "./ReviewTable";
 
 // Top-level app shell, layout ported from po-generator-draft.html (design
 // mockup): nav-rail + tabs + branded header + one of three screens +
@@ -19,8 +19,8 @@ import { ReviewTable, type SubmitError } from "./ReviewTable";
 //     persistence layer to back a real activity log, so it's omitted rather
 //     than showing fabricated history -- add it back once there's a real
 //     data source. (The mockup's `.log-list`/`.log-row`/`.pill` styles are
-//     reused for the multi-invoice queue screen below instead, since that's
-//     a genuinely similar list-of-records UI.)
+//     reused for the batch summary screen below instead, since that's a
+//     genuinely similar list-of-records UI.)
 //   - A failed PO submission keeps the user on the Review screen with an
 //     inline error (see ReviewTable's submitError prop) instead of
 //     discarding their edited draft -- the mockup has no error state to
@@ -32,16 +32,19 @@ import { ReviewTable, type SubmitError } from "./ReviewTable";
 //     had no usable internal id to build the link from.
 //   - Multi-invoice bundle support (see CLAUDE.md's "Multi-invoice batch
 //     flow" section): a PDF containing several invoices back-to-back (a
-//     real Arco delivery format) is not in the mockup at all -- new queue
-//     UI below, layered on top of the same single-invoice ReviewTable/
-//     ConfirmationScreen so a single-invoice upload behaves identically to
-//     before.
+//     real Arco delivery format) is not in the mockup at all. STRICTLY
+//     LINEAR, not a jumpable queue: BatchInvoiceScreen below shows only the
+//     current invoice, auto-advances to the next one right after a PO is
+//     created (or an invoice is skipped -- see onSkip), and auto-navigates
+//     to BatchSummaryScreen once the last one is done. There is deliberately
+//     no way to revisit an already-submitted invoice. A single-invoice
+//     upload is unaffected -- same ReviewTable/ConfirmationScreen as always.
 
 type Tab = "dashboard" | "edit" | "confirm";
 
 interface QueuedInvoice {
   boundary: InvoiceBoundary;
-  status: "pending" | "loading" | "ready" | "submitted" | "error";
+  status: "pending" | "loading" | "ready" | "submitted" | "error" | "skipped";
   invoice?: ExtractedInvoice;
   poResult?: Record<string, unknown>;
   error?: string;
@@ -55,7 +58,7 @@ export function InvoiceUploader() {
 
   // The originally uploaded file -- kept (not just consumed once) so a
   // multi-invoice bundle can re-send it for each queued invoice's lazy
-  // per-invoice extraction (see handleReviewQueuedInvoice below).
+  // per-invoice extraction (see loadQueuedInvoice below).
   const [file, setFile] = useState<File | null>(null);
 
   // Multi-invoice bundle state -- null means "not a bundle", and every
@@ -78,8 +81,19 @@ export function InvoiceUploader() {
   // has already started over (clicked Dashboard, picked a different file).
   const requestId = useRef(0);
 
+  // Synchronous re-entrancy guard for PO submission. `submitting` (React
+  // state) is NOT safe for this by itself: state updates aren't applied
+  // until after the event handler that triggered them returns, so two
+  // click events arriving close together can both read `submitting` as
+  // still `false` and both fire a real PurchaseOrders_Create request --
+  // this is exactly how a rapid double-click on "Create purchase order"
+  // was creating duplicate POs in ServiceTitan. A ref is mutated
+  // synchronously, so it closes that race regardless of render timing.
+  const submittingRef = useRef(false);
+
   const isBatch = batchQueue !== null;
-  const batchAllSubmitted = isBatch && batchQueue!.every((q) => q.status === "submitted");
+  const batchAllSubmitted =
+    isBatch && batchQueue!.every((q) => q.status === "submitted" || q.status === "skipped");
 
   function canGoTo(target: Tab): boolean {
     if (target === "dashboard") return true;
@@ -133,16 +147,19 @@ export function InvoiceUploader() {
         return;
       }
 
-      // Bundle: set up the queue, but DON'T eagerly extract every invoice --
-      // each one is only fully extracted when the user actually reviews it
-      // (see handleReviewQueuedInvoice). Avoids both wasted API calls for
-      // invoices the user may never get to, and the real risk of a large
-      // bundle's combined output exceeding a single request's time/token
-      // budget.
-      setBatchQueue(boundaries.map((boundary) => ({ boundary, status: "pending" })));
-      setActiveQueueIndex(null);
+      // Bundle: set up the queue, but only eagerly extract the FIRST
+      // invoice -- the rest are lazily extracted one at a time as the user
+      // advances through the strict linear review flow (see
+      // loadQueuedInvoice / advanceToNextOrFinish). Avoids both wasted API
+      // calls for invoices the user may never get to, and the real risk of
+      // a large bundle's combined output exceeding a single request's
+      // time/token budget.
+      const queue: QueuedInvoice[] = boundaries.map((boundary) => ({ boundary, status: "pending" }));
+      setBatchQueue(queue);
+      setActiveQueueIndex(0);
       setExtracting(false);
       setTab("edit");
+      await loadQueuedInvoice(0, selectedFile, queue[0].boundary);
     } catch (err) {
       if (thisRequest !== requestId.current) return;
       setExtractError(err instanceof Error ? err.message : "Extraction failed -- try again in a moment, or contact support if this persists.");
@@ -172,23 +189,21 @@ export function InvoiceUploader() {
     }
   }
 
-  // Lazily extracts ONE queued invoice's full data (if not already
-  // extracted) and drills into it for review. Re-sends the original file
-  // plus this invoice's page range -- see /api/extract-invoice-page-range.
-  async function handleReviewQueuedInvoice(index: number) {
-    const item = batchQueue![index];
-    if (item.status === "ready" || item.status === "submitted") {
-      setActiveQueueIndex(index);
-      return;
-    }
-    if (!file) return;
-
+  // Lazily extracts ONE queued invoice's full data and stores it on its
+  // queue slot. Re-sends the original file plus this invoice's page range
+  // -- see /api/extract-invoice-page-range. Takes `targetFile`/`boundary`
+  // as explicit arguments rather than reading `file`/`batchQueue` state,
+  // since some call sites (e.g. the very first invoice, right after
+  // setBatchQueue/setFile) would otherwise read a stale pre-update value --
+  // React state updates aren't visible in the same synchronous call that
+  // set them.
+  async function loadQueuedInvoice(index: number, targetFile: File, boundary: InvoiceBoundary) {
     setBatchQueue((prev) => prev!.map((q, i) => (i === index ? { ...q, status: "loading", error: undefined } : q)));
 
     const formData = new FormData();
-    formData.append("file", file);
-    formData.append("startPage", String(item.boundary.startPage));
-    formData.append("endPage", String(item.boundary.endPage));
+    formData.append("file", targetFile);
+    formData.append("startPage", String(boundary.startPage));
+    formData.append("endPage", String(boundary.endPage));
 
     try {
       const res = await fetch("/api/extract-invoice-page-range", { method: "POST", body: formData });
@@ -197,11 +212,15 @@ export function InvoiceUploader() {
         throw new Error(body.error ?? `Extraction failed (${res.status}) -- try again in a moment, or contact support if this persists.`);
       }
       setBatchQueue((prev) => prev!.map((q, i) => (i === index ? { ...q, status: "ready", invoice: body as ExtractedInvoice } : q)));
-      setActiveQueueIndex(index);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Extraction failed -- try again in a moment, or contact support if this persists.";
       setBatchQueue((prev) => prev!.map((q, i) => (i === index ? { ...q, status: "error", error: message } : q)));
     }
+  }
+
+  function handleRetryQueuedInvoice(index: number) {
+    if (!file) return;
+    void loadQueuedInvoice(index, file, batchQueue![index].boundary);
   }
 
   async function handleConfirm(
@@ -210,6 +229,12 @@ export function InvoiceUploader() {
     inventoryLocationId: number,
     requiredOn: string,
   ) {
+    // See submittingRef's comment above -- checked-and-set synchronously,
+    // before anything else, so a second call arriving before this one's
+    // state updates have rendered is a no-op rather than a second real
+    // network request.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setSubmitError(null);
 
@@ -226,39 +251,61 @@ export function InvoiceUploader() {
         // present, names the specific input that caused the failure (e.g.
         // "projectNumber" for a job-not-found error) so the review table can
         // highlight that exact field -- see ReviewTable.tsx's SubmitError
-        // type and per-field styling.
+        // type and per-field styling. This branch (and the catch below) is
+        // the ONLY place a failure is ever reported -- the queue's status
+        // never advances to "submitted" except from the res.ok branch below,
+        // which only runs once the actual PurchaseOrders_Create response has
+        // come back, so the displayed status always matches what really
+        // happened, never an assumed/optimistic state.
         setSubmitError({ message: body.error ?? `PO creation failed (${res.status}). Try again in a moment, or contact support if this persists.`, field: body.field });
-        setSubmitting(false);
         return;
       }
 
       if (isBatch && activeQueueIndex !== null) {
-        // Batch mode: record this PO on its queue slot and return to the
-        // queue overview (not the single-PO Confirmation screen) so the
-        // user can see progress and choose whether to continue -- never
-        // forced through the rest of the queue in one sitting.
+        // Batch mode: record this PO on its queue slot, then automatically
+        // move on to the next invoice (or, if this was the last one, to the
+        // Confirmation summary) -- see advanceToNextOrFinish. No manual
+        // "review next" click and no way back to an already-submitted
+        // invoice, per the linear single-invoice-at-a-time redesign.
         const submittedIndex = activeQueueIndex;
-        setBatchQueue((prev) => {
-          const next = prev!.map((q, i) => (i === submittedIndex ? { ...q, status: "submitted" as const, poResult: body } : q));
-          return next;
-        });
-        setActiveQueueIndex(null);
-        setSubmitting(false);
+        setBatchQueue((prev) => prev!.map((q, i) => (i === submittedIndex ? { ...q, status: "submitted" as const, poResult: body } : q)));
+        await advanceToNextOrFinish(submittedIndex);
         return;
       }
 
       setSubmittedInvoice(invoice);
       setPoResult(body);
-      setSubmitting(false);
       setTab("confirm");
     } catch {
       setSubmitError({ message: "PO creation failed -- try again in a moment, or contact support if this persists." });
+    } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
 
-  const activeQueueInvoice =
-    isBatch && activeQueueIndex !== null ? batchQueue![activeQueueIndex] : null;
+  // Shared by a just-submitted invoice (handleConfirm) and a skipped one
+  // (handleSkipQueuedInvoice, e.g. a queued item that turns out not to be a
+  // real invoice at all -- see ReviewTable's isNotAnInvoice hard block).
+  // Moves to the next not-yet-handled invoice and lazily extracts it, or,
+  // once nothing is left, navigates straight to the batch summary -- no
+  // manual click required either way.
+  async function advanceToNextOrFinish(currentIndex: number) {
+    const queue = batchQueue!;
+    const nextIndex = currentIndex + 1;
+    if (nextIndex < queue.length && file) {
+      setActiveQueueIndex(nextIndex);
+      await loadQueuedInvoice(nextIndex, file, queue[nextIndex].boundary);
+    } else {
+      setActiveQueueIndex(null);
+      setTab("confirm");
+    }
+  }
+
+  function handleSkipQueuedInvoice(index: number) {
+    setBatchQueue((prev) => prev!.map((q, i) => (i === index ? { ...q, status: "skipped" } : q)));
+    void advanceToNextOrFinish(index);
+  }
 
   return (
     <div className="app-shell">
@@ -303,28 +350,16 @@ export function InvoiceUploader() {
           />
         )}
 
-        {tab === "edit" && isBatch && activeQueueInvoice === null && (
-          <BatchQueueScreen queue={batchQueue!} onReview={handleReviewQueuedInvoice} />
-        )}
-
-        {tab === "edit" && isBatch && activeQueueInvoice?.invoice && (
-          <>
-            <div className="banner" style={{ background: "var(--border)", marginBottom: 12 }}>
-              Invoice {activeQueueIndex! + 1} of {batchQueue!.length}
-              {activeQueueInvoice.invoice.invoiceNumber ? `: #${activeQueueInvoice.invoice.invoiceNumber}` : ""}
-              {" -- "}
-              <button type="button" className="btn-ghost" onClick={() => setActiveQueueIndex(null)}>
-                Back to queue
-              </button>
-            </div>
-            <ReviewTable
-              invoice={activeQueueInvoice.invoice}
-              onConfirm={handleConfirm}
-              onCancel={() => setActiveQueueIndex(null)}
-              submitting={submitting}
-              submitError={submitError}
-            />
-          </>
+        {tab === "edit" && isBatch && activeQueueIndex !== null && (
+          <BatchInvoiceScreen
+            queue={batchQueue!}
+            activeIndex={activeQueueIndex}
+            onRetry={handleRetryQueuedInvoice}
+            onSkip={handleSkipQueuedInvoice}
+            onConfirm={handleConfirm}
+            submitting={submitting}
+            submitError={submitError}
+          />
         )}
 
         {tab === "edit" && !isBatch && extractedInvoice && (
@@ -405,78 +440,74 @@ function DashboardScreen({
   );
 }
 
-const QUEUE_STATUS_PILL: Record<QueuedInvoice["status"], { label: string; variant: "success" | "warning" | "error" }> = {
-  pending: { label: "Not reviewed", variant: "warning" },
-  loading: { label: "Loading...", variant: "warning" },
-  ready: { label: "Ready to review", variant: "warning" },
-  submitted: { label: "PO created", variant: "success" },
-  error: { label: "Failed to load", variant: "error" },
-};
-
-// Multi-invoice bundle queue -- NOT in the design mockup (which has no
-// concept of a bundled upload). Reuses the mockup's `.log-list`/`.log-row`/
-// `.pill` styles (the same ones behind the Dashboard's omitted activity
-// log), since this is genuinely the same "list of records with a status"
-// shape. Deliberately does NOT auto-advance through the queue or force the
-// user through every invoice in one sitting -- each row is reviewed on
-// demand, and the user can leave whenever they want with the rest still
-// sitting here as "Not reviewed".
-function BatchQueueScreen({
+// Multi-invoice bundle review -- NOT in the design mockup (which has no
+// concept of a bundled upload). Strictly linear, deliberately NOT a
+// jumpable list: shows only the CURRENT invoice (loading, error, or the
+// review form), never the other invoices in the bundle, and there is no
+// control anywhere in this component to go back to a previous one --
+// avoids the "which one did I already submit" ambiguity a free-form queue
+// invites. Advancing to the next invoice, and reaching the batch summary
+// once the last one is done, both happen automatically from
+// InvoiceUploader's advanceToNextOrFinish -- this component has no "next"
+// button of its own.
+function BatchInvoiceScreen({
   queue,
-  onReview,
+  activeIndex,
+  onRetry,
+  onSkip,
+  onConfirm,
+  submitting,
+  submitError,
 }: {
   queue: QueuedInvoice[];
-  onReview: (index: number) => void;
+  activeIndex: number;
+  onRetry: (index: number) => void;
+  onSkip: (index: number) => void;
+  onConfirm: ReviewTableProps["onConfirm"];
+  submitting: boolean;
+  submitError: SubmitError | null;
 }) {
-  const submittedCount = queue.filter((q) => q.status === "submitted").length;
-  const nextPendingIndex = queue.findIndex((q) => q.status === "pending" || q.status === "error");
+  const item = queue[activeIndex];
+  const label = item.invoice?.invoiceNumber ?? item.boundary.invoiceNumberPreview;
 
   return (
     <div className="screen">
-      <div className="card">
-        <div className="section-label">
-          Invoice bundle &middot; {submittedCount} of {queue.length} submitted
-        </div>
-        <div className="log-list">
-          {queue.map((item, i) => {
-            const pill = QUEUE_STATUS_PILL[item.status];
-            const label =
-              item.invoice?.invoiceNumber ??
-              item.boundary.invoiceNumberPreview ??
-              `pages ${item.boundary.startPage}-${item.boundary.endPage}`;
-            return (
-              <div className="log-row" key={i}>
-                <div className="left">
-                  <i className="ti ti-file-invoice" />
-                  <span>
-                    Invoice {i + 1} of {queue.length}
-                    {label ? ` -- #${label}` : ""}
-                  </span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span className={`pill ${pill.variant}`}>{pill.label}</span>
-                  {item.status !== "submitted" && (
-                    <button type="button" className="btn-ghost" onClick={() => onReview(i)}>
-                      {item.status === "error" ? "Retry" : "Review"}
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        {queue.some((q) => q.status === "error") && (
-          <div className="banner banner-error" style={{ marginTop: 12 }}>
-            <i className="ti ti-alert-circle" />
-            {queue.find((q) => q.status === "error")?.error}
-          </div>
-        )}
+      <div className="banner" style={{ background: "var(--border)", marginBottom: 12 }}>
+        {queue.length} invoices detected in this bundle &middot; reviewing invoice {activeIndex + 1} of{" "}
+        {queue.length}
+        {label ? `: #${label}` : ""}
       </div>
 
-      {nextPendingIndex !== -1 && (
-        <button type="button" className="btn-primary" onClick={() => onReview(nextPendingIndex)}>
-          Review next invoice ({nextPendingIndex + 1} of {queue.length})
-        </button>
+      {item.status === "loading" && (
+        <div className="dropzone">
+          <i className="ti ti-loader-2" />
+          <div className="title">Reading invoice {activeIndex + 1} of {queue.length}...</div>
+        </div>
+      )}
+
+      {item.status === "error" && (
+        <div className="banner banner-error">
+          <i className="ti ti-alert-circle" />
+          <div>
+            {item.error}
+            <div style={{ marginTop: 8 }}>
+              <button type="button" className="btn-secondary" onClick={() => onRetry(activeIndex)}>
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {item.status === "ready" && item.invoice && (
+        <ReviewTable
+          invoice={item.invoice}
+          onConfirm={onConfirm}
+          onCancel={() => onSkip(activeIndex)}
+          cancelLabel="Skip this invoice"
+          submitting={submitting}
+          submitError={submitError}
+        />
       )}
     </div>
   );
@@ -489,14 +520,20 @@ function BatchSummaryScreen({
   queue: QueuedInvoice[];
   onStartOver: () => void;
 }) {
+  const createdCount = queue.filter((q) => q.status === "submitted").length;
+  const skippedCount = queue.length - createdCount;
+
   return (
     <div className="screen">
       <div className="confirm-wrap">
         <div className="confirm-icon">
           <i className="ti ti-check" />
         </div>
-        <div className="confirm-title">{queue.length} purchase orders created</div>
-        <div className="confirm-sub">Every invoice in this bundle has been submitted to ServiceTitan.</div>
+        <div className="confirm-title">{createdCount} purchase order{createdCount === 1 ? "" : "s"} created</div>
+        <div className="confirm-sub">
+          Every invoice in this bundle has been submitted to ServiceTitan
+          {skippedCount > 0 ? ` (${skippedCount} skipped -- not a valid invoice)` : ""}.
+        </div>
 
         <div className="banner banner-warning" style={{ marginTop: 12 }}>
           <i className="ti ti-alert-triangle" />
@@ -520,11 +557,17 @@ function BatchSummaryScreen({
                   </span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="pill success">PO #{String(poNumber)}</span>
-                  {typeof poViewUrl === "string" && (
-                    <a href={poViewUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost">
-                      View
-                    </a>
+                  {item.status === "skipped" ? (
+                    <span className="pill warning">Skipped</span>
+                  ) : (
+                    <>
+                      <span className="pill success">PO #{String(poNumber)}</span>
+                      {typeof poViewUrl === "string" && (
+                        <a href={poViewUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost">
+                          View
+                        </a>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

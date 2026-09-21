@@ -15,7 +15,7 @@ export interface SubmitError {
   field?: "vendorName" | "projectNumber";
 }
 
-interface ReviewTableProps {
+export interface ReviewTableProps {
   invoice: ExtractedInvoice;
   onConfirm: (
     invoice: ExtractedInvoice,
@@ -24,6 +24,12 @@ interface ReviewTableProps {
     requiredOn: string,
   ) => void;
   onCancel: () => void;
+  // Label for the "not a vendor invoice" hard-block screen's button (see
+  // isNotAnInvoice below). Defaults to the single-invoice-upload wording;
+  // the multi-invoice batch flow (InvoiceUploader.tsx's BatchInvoiceScreen)
+  // overrides it to "Skip this invoice" since onCancel there advances the
+  // bundle rather than returning to the file picker.
+  cancelLabel?: string;
   submitting: boolean;
   submitError: SubmitError | null;
 }
@@ -171,7 +177,7 @@ const VISIBLE_LINE_ITEM_LIMIT = 3; // matches the "+N more line items" treatment
 // src/lib/servicetitan/payload-builder.ts). The one exception is a document
 // that isn't an invoice at all (e.g. an internal memo) -- there's no
 // partial data worth editing, so that case hard-blocks below.
-export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitError }: ReviewTableProps) {
+export function ReviewTable({ invoice, onConfirm, onCancel, cancelLabel, submitting, submitError }: ReviewTableProps) {
   const [draft, setDraft] = useState<ExtractedInvoice>(invoice);
   const [showAllLineItems, setShowAllLineItems] = useState(false);
   // Defaults to today but is genuinely editable, including backdating --
@@ -244,7 +250,7 @@ export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitEr
           there&apos;s nothing to review or submit.
         </div>
         <button type="button" className="btn-secondary" onClick={onCancel}>
-          Choose a different file
+          {cancelLabel ?? "Choose a different file"}
         </button>
       </div>
     );
