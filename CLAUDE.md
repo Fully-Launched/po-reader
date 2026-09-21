@@ -266,3 +266,42 @@ All of the following must be set as **Vercel environment variables** — never c
 - [x] **Icon CDN link was broken, now fixed.** `layout.tsx`'s tabler-icons `<link>` pointed at `.../tabler-icons/2.47.0/iconfont/tabler-icons.min.css` -- CONFIRMED 404 via `curl` (that version/path never existed on cdnjs; versions jump 1.35.0 -> 3.10.0, and the CSS file moved out of an `iconfont/` subdirectory in the 3.x releases). This silently broke every icon in the app -- found while investigating a reported empty circle on the confirmation screen (the checkmark icon). Fixed to `.../tabler-icons/3.47.0/tabler-icons.min.css`, CONFIRMED 200 and containing every `ti-*` class this app uses (`ti-check`, `ti-loader-2`, `ti-shield-check`, `ti-alert-triangle`, etc.) via `curl`. **Still not visually confirmed in a real browser** (no Chrome extension connection this session) -- worth a visual pass to double-check icon rendering (glyph shapes, sizing) once available, though the CDN link itself is now confirmed correct.
 - [x] "View in ServiceTitan" deep link wired up — confirmed sandbox pattern, production base domain inferred but not independently confirmed (see Open Questions)
 - [ ] Activity log / recent-invoices view built (currently omitted -- no persistence layer exists, see Open Questions)
+
+## Production Rollout Checklist
+
+### Kevin's confirmations still needed
+- [ ] Exact Business Unit name in his real ServiceTitan account (sandbox default was "HVAC Service," his real one may differ)
+- [ ] Exact Inventory Location/Warehouse name in his real account
+- [ ] Confirm PO Type has "Automatically Receive" turned OFF (he explicitly doesn't want auto-receive)
+- [ ] Real vendor names in his account for TEC and Supply House/Chase, confirm the remap table matches exactly
+- [ ] Real shipping address confirmed (already have: 510 S Spring Road, Elmhurst, IL 60126, no unit) — reconfirm this is still correct
+- [ ] Confirm how many Business Units/Warehouses he actually has, sandbox only had one of each, worth knowing if his real account has more
+
+### Pricebook matching accuracy (TEC-specific)
+- [ ] Real TEC invoice line items need to be tested against his actual Pricebook, names must match reasonably closely for the matching logic to work
+- [ ] Confirm what happens for near-misses (e.g. "COMFORT SERIES 96% GAS FURNACE" vs however his Pricebook actually names it), may need fuzzy matching improvements, not just exact/substring match, once real data is tested
+- [ ] Test with real TEC and Supply House invoices (not just sandbox/sample data) before going live
+
+### Getting Kevin his real credentials
+- [ ] Kevin needs to request Developer Portal access under his own account if not already done (or confirm he's already approved from earlier in this project)
+- [ ] Kevin connects the app in his real (production) ServiceTitan account: Settings > Integrations > API Application Access > Connect New App
+- [ ] Kevin generates and sends the real Client ID + Client Secret (production, not sandbox)
+- [ ] Add production SERVICETITAN_* env vars to Vercel (separate from sandbox ones, likely needs a naming distinction or separate env scoping)
+- [ ] Confirm production vs. sandbox API base URLs are correctly branched in code (auth.servicetitan.io vs auth-integration, api.servicetitan.io vs api-integration)
+- [ ] Test the ServiceTitan deep link against production domain (currently using go.servicetitan.com, confirmed via research but not live-tested for POs)
+
+### Deployment/access for Kevin
+- [ ] Decide and confirm the final URL Kevin will use (current Vercel preview URLs are auto-generated/ugly, consider adding a custom domain or subdomain, e.g. po-reader.fullylaunched.com)
+- [ ] Confirm Vercel Pro is active (needed for collaboration, already upgraded) and billing is sorted
+- [ ] Set up production Anthropic API key/workspace separate from sandbox testing key, with a spend limit and auto-reload configured
+- [ ] Decide whether Kevin needs any login/auth on the tool itself, or if it stays open-access behind an unguessable URL (worth a real decision, not default)
+
+### Billing Kevin
+- [ ] Confirm deposit payment method and receive it (Stripe/Zelle/wire, per earlier email)
+- [ ] Set up the recurring monthly invoice ($75-150/mo range, covering hosting + API + support)
+- [ ] Move Anthropic/Vercel billing off personal card onto a Fully Launched business card
+
+### Final QA before going live
+- [ ] Full end-to-end test with Kevin's real credentials, real invoice, real job number, before he uses it unsupervised
+- [ ] Confirm auto-receive is genuinely off on his real PO Type (test this explicitly, don't assume)
+- [ ] Re-verify the "remember to receive this PO" reminder is visible and clear on the confirmation screen
