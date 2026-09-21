@@ -74,3 +74,29 @@ export interface ExtractedInvoice {
   extractionConfidence: ExtractionConfidence;
   notes: string;
 }
+
+/**
+ * One detected invoice's page range within a bundled PDF (e.g. Arco's real
+ * sample: one PDF containing 18 separate invoices, plus a non-invoice
+ * cover/index page). Produced by detectInvoiceBoundaries() in
+ * extraction.ts -- a lightweight first pass over the WHOLE document that
+ * only identifies boundaries, not full invoice data (keeps output small
+ * enough to never hit max_tokens even for large bundles). Each boundary is
+ * later used to split out just those pages and run the existing
+ * extractInvoice() on that sub-PDF alone -- see /api/extract-invoice-page-range
+ * and src/lib/pdf-split.ts.
+ */
+export interface InvoiceBoundary {
+  /** 1-indexed, inclusive. */
+  startPage: number;
+  /** 1-indexed, inclusive. */
+  endPage: number;
+  /**
+   * Invoice number read off the first page of this range, if visible --
+   * PREVIEW ONLY, for showing "Invoice 1 of 16: #23530" in the queue UI
+   * before the full per-invoice extraction has run. Not used for anything
+   * that flows into a PO -- the real invoiceNumber comes from the full
+   * extraction of the split-out sub-PDF.
+   */
+  invoiceNumberPreview: string | null;
+}

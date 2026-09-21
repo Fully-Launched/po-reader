@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { ExtractedInvoice } from "./types";
+import type { ExtractedInvoice, InvoiceBoundary } from "./types";
 
 // Ported from the comfort-x-design-invoice-tool prototype's
 // extraction/extract_invoice.py, validated against a real Arco Supply
@@ -175,13 +175,10 @@ export class ExtractionTruncatedError extends Error {
   }
 }
 
-// TODO: Arco's real invoices arrived as ONE PDF containing 18 separate invoices
-// (a monthly batch/statement), not one PDF per invoice. If that's how these
-// consistently arrive, this needs a batch-aware sibling -- e.g.
-// extractInvoiceBatch(pdfBuffer) -> Promise<ExtractedInvoice[]> -- that asks
-// Claude to split the document into its constituent invoices before
-// extracting each one. Confirm with the client whether this bundled format
-// is typical before building that out, since it changes the intake design.
+// Bundled/batch invoice delivery CONFIRMED (client sample): Arco's real
+// invoices arrived as ONE PDF containing 18 separate invoices (a monthly
+// statement), not one PDF per order -- see detectInvoiceBoundaries() below
+// and CLAUDE.md's "Multi-invoice batch flow" section for the full design.
 
 // Thrown when the bytes we're about to send don't look like a PDF at all --
 // catches a corrupt/mismatched upload before wasting an API call, and gives
@@ -194,19 +191,22 @@ export class InvalidPdfError extends Error {
   }
 }
 
-export async function extractInvoice(pdfBuffer: Buffer): Promise<ExtractedInvoice> {
-  const base64Data = pdfBuffer.toString("base64");
-
-  // Sanity check: decode the base64 right back and confirm the standard PDF
-  // file signature is intact before spending an API call on it. This is the
-  // fastest way to tell "we sent Claude garbage" apart from "the PDF itself
-  // is malformed" when debugging a "PDF specified was not valid" error.
+// Shared by extractInvoice() and detectInvoiceBoundaries() -- decode the
+// base64 right back and confirm the standard PDF file signature is intact
+// before spending an API call on it. Fastest way to tell "we sent Claude
+// garbage" apart from "the PDF itself is malformed".
+function validatePdfSignature(pdfBuffer: Buffer, base64Data: string, logPrefix: string): void {
   const decodedHead = Buffer.from(base64Data, "base64").subarray(0, 5);
   const signature = decodedHead.toString("latin1");
-  console.log(`extractInvoice: pdfBuffer=${pdfBuffer.length} bytes, base64=${base64Data.length} chars, decoded signature=${JSON.stringify(signature)}`);
+  console.log(`${logPrefix}: pdfBuffer=${pdfBuffer.length} bytes, base64=${base64Data.length} chars, decoded signature=${JSON.stringify(signature)}`);
   if (!signature.startsWith("%PDF")) {
     throw new InvalidPdfError(signature);
   }
+}
+
+export async function extractInvoice(pdfBuffer: Buffer): Promise<ExtractedInvoice> {
+  const base64Data = pdfBuffer.toString("base64");
+  validatePdfSignature(pdfBuffer, base64Data, "extractInvoice");
 
   const client = new Anthropic();
 
@@ -254,4 +254,128 @@ export async function extractInvoice(pdfBuffer: Buffer): Promise<ExtractedInvoic
 
   // strict: true guarantees this matches the schema on a normal completion.
   return toExtractedInvoice(toolUseBlock.input as RawExtraction);
+}
+
+// Ported from the same real Arco sample that confirmed batch delivery
+// (one PDF, 18 invoices, plus a non-invoice cover/index page listing the
+// invoice numbers in the bundle).
+const DETECT_BOUNDARIES_PROMPT = `This document may contain a SINGLE vendor invoice, or it may be a bundle \
+containing MULTIPLE separate vendor invoices back-to-back (e.g. a monthly statement). Your job here is ONLY \
+to identify page boundaries -- do NOT extract line items, totals, or any other invoice data; that happens in \
+a separate pass per invoice afterward.
+
+Scan the document page by page and identify where each separate invoice starts and ends. Look for repeated \
+structural signals that mark the start of a NEW invoice: a new "INVOICE" header/title, a new invoice number, \
+a new invoice date, a new "Bill To" block -- these repeating side-by-side is what distinguishes "invoice 3 of \
+5 starts here" from "invoice 2 continues onto this page". Do NOT assume a fixed page count per invoice --  \
+real invoices in a bundle can be 1, 2, 3, or more pages each, and the count is not predictable or uniform \
+across the same bundle.
+
+Some bundles include a COVER or SUMMARY page first (e.g. an index/table of contents listing every invoice \
+number in the bundle). This is NOT an invoice itself -- do not report it as one, and do not include it in \
+any invoice's page range. Skip it entirely.
+
+If the document contains only ONE invoice (the common case), report a single entry covering the whole \
+document (minus any cover page, if present).
+
+For each invoice found, report its page range (1-indexed, inclusive of both the start and end page) and, if \
+visible on its first page, the invoice number -- this is a PREVIEW value only, used to label the invoice in \
+a queue before the real per-invoice extraction runs, so a best-effort reading is fine; it does not need to be \
+perfectly precise.`;
+
+const DETECT_INVOICE_BOUNDARIES_TOOL: Anthropic.Tool = {
+  name: "detect_invoice_boundaries",
+  description: "Record the page range of each separate vendor invoice found in the document.",
+  strict: true,
+  input_schema: {
+    type: "object",
+    properties: {
+      invoices: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            start_page: { type: "integer", description: "1-indexed, inclusive" },
+            end_page: { type: "integer", description: "1-indexed, inclusive" },
+            invoice_number_preview: { type: ["string", "null"] },
+          },
+          required: ["start_page", "end_page", "invoice_number_preview"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["invoices"],
+    additionalProperties: false,
+  },
+} as Anthropic.Tool;
+
+interface RawBoundary {
+  start_page: number;
+  end_page: number;
+  invoice_number_preview: string | null;
+}
+
+/**
+ * First pass over a (possibly bundled) PDF: identifies each invoice's page
+ * range without extracting any invoice data -- keeps output small enough to
+ * never hit max_tokens even for a large bundle (Arco's real sample: 18
+ * invoices in one PDF). Each boundary is later used by
+ * splitPdfPageRange() + extractInvoice() (see /api/extract-invoice-page-range)
+ * to fully extract that one invoice alone, reusing the existing
+ * single-invoice extraction path unchanged.
+ *
+ * Returns a single boundary spanning the whole document for the common
+ * single-invoice case -- callers should treat a length-1 result as "not a
+ * bundle" and fall back to the existing single-invoice flow (see
+ * /api/detect-invoice-boundaries and InvoiceUploader.tsx).
+ */
+export async function detectInvoiceBoundaries(pdfBuffer: Buffer): Promise<InvoiceBoundary[]> {
+  const base64Data = pdfBuffer.toString("base64");
+  validatePdfSignature(pdfBuffer, base64Data, "detectInvoiceBoundaries");
+
+  const client = new Anthropic();
+
+  const response = await client.messages.create({
+    model: "claude-opus-5",
+    // Boundary-only output is tiny (a few fields per invoice) even for a
+    // large bundle -- nowhere near extractInvoice()'s 16000, but kept
+    // generous since this pass reads the WHOLE document regardless of size.
+    max_tokens: 4000,
+    tools: [DETECT_INVOICE_BOUNDARIES_TOOL],
+    tool_choice: { type: "tool", name: "detect_invoice_boundaries" },
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "document",
+            source: {
+              type: "base64",
+              media_type: "application/pdf",
+              data: base64Data,
+            },
+          },
+          { type: "text", text: DETECT_BOUNDARIES_PROMPT },
+        ],
+      },
+    ],
+  });
+
+  if (response.stop_reason === "max_tokens") {
+    throw new ExtractionTruncatedError();
+  }
+
+  const toolUseBlock = response.content.find(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+  );
+  if (!toolUseBlock) {
+    throw new Error(`Claude did not call the detect_invoice_boundaries tool (stop_reason: ${response.stop_reason})`);
+  }
+
+  const raw = (toolUseBlock.input as { invoices: RawBoundary[] }).invoices;
+  return raw.map((b) => ({
+    startPage: b.start_page,
+    endPage: b.end_page,
+    invoiceNumberPreview: b.invoice_number_preview,
+  }));
 }
