@@ -15,7 +15,10 @@ interface ReviewTableProps {
 // Generic loader for the Business Unit / Inventory Location dropdowns --
 // both follow the identical fetch-on-mount / loading / error / empty /
 // auto-select-single-option pattern, just against different endpoints.
-function useIdNameOptions(url: string) {
+// An optional defaultName pre-selects a preferred option by name when
+// present (e.g. Business Unit defaulting to "HVAC Service") -- the
+// dropdown still renders fully editable either way.
+function useIdNameOptions(url: string, defaultName?: string) {
   const [options, setOptions] = useState<{ id: number; name: string }[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState("");
@@ -34,6 +37,11 @@ function useIdNameOptions(url: string) {
         // but it still renders in the dropdown rather than being hidden.
         if (result.length === 1) {
           setSelectedId(String(result[0].id));
+        } else if (defaultName) {
+          const preferred = result.find((option) => option.name === defaultName);
+          if (preferred) {
+            setSelectedId(String(preferred.id));
+          }
         }
       })
       .catch((err) => {
@@ -43,7 +51,7 @@ function useIdNameOptions(url: string) {
     return () => {
       cancelled = true;
     };
-  }, [url]);
+  }, [url, defaultName]);
 
   return { options, error, selectedId, setSelectedId };
 }
@@ -116,7 +124,7 @@ const VISIBLE_LINE_ITEM_LIMIT = 3; // matches the "+N more line items" treatment
 export function ReviewTable({ invoice, onConfirm, onCancel, submitting, submitError }: ReviewTableProps) {
   const [draft, setDraft] = useState<ExtractedInvoice>(invoice);
   const [showAllLineItems, setShowAllLineItems] = useState(false);
-  const businessUnit = useIdNameOptions("/api/business-units");
+  const businessUnit = useIdNameOptions("/api/business-units", "HVAC Service");
   const inventoryLocation = useIdNameOptions("/api/inventory-locations");
 
   if (isNotAnInvoice(draft)) {
