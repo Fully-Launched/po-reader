@@ -27,28 +27,26 @@
 
 * { box-sizing: border-box; color-scheme: light; }
 
+html, body { height: 100%; }
+
 body {
   margin: 0;
   font-family: 'Inter', -apple-system, sans-serif;
-  background: #F3F4F6;
+  background: var(--bg);
   color: var(--text-primary);
   display: flex;
-  justify-content: center;
-  padding: 2rem 1rem;
+  min-height: 100vh;
 }
 
+/* Full-bleed app shell -- previously a centered, max-width card with a
+   border/shadow/radius floating on a grey page background. Now fills the
+   sidebar + content across the entire viewport on every screen, not just
+   Dashboard. min-height (not height) so a long line-item table can still
+   grow the page and scroll normally instead of being clipped at 100vh. */
 .app-shell {
   width: 100%;
-  /* Widened from 760px -- the two-pane review layout (doc-panel + form)
-     and the vertical sidebar nav both need more horizontal room than a
-     single narrow centered card did; this also addresses earlier feedback
-     about excess grey space around the shell. */
-  max-width: 960px;
+  min-height: 100vh;
   display: flex;
-  border-radius: 14px;
-  overflow: hidden;
-  border: 0.5px solid var(--border-strong);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   background: var(--bg);
 }
 
@@ -89,9 +87,8 @@ body {
 
 .content {
   flex: 1;
-  padding: 1.75rem 1.75rem 1.5rem;
+  padding: 1.75rem 2.5rem 1.5rem;
   background: var(--bg);
-  min-height: 560px;
   display: flex;
   flex-direction: column;
 }
@@ -246,8 +243,25 @@ input.mono { font-family: 'IBM Plex Mono', monospace; }
 input:focus, select:focus { outline: none; border-color: var(--blue); }
 input:disabled, select:disabled { background: #F9FAFB; color: var(--text-muted); }
 
-.line-item-row { display: grid; grid-template-columns: minmax(0,2.4fr) 1.2fr 0.7fr 0.9fr 0.9fr 0.6fr; gap: 8px; align-items: center; margin-bottom: 6px; }
-.line-item-head { display: grid; grid-template-columns: minmax(0,2.4fr) 1.2fr 0.7fr 0.9fr 0.9fr 0.6fr; gap: 8px; font-size: 11px; color: var(--text-secondary); padding: 0 2px 6px; }
+/* Unit price / Total given explicit pixel floors (minmax) rather than pure
+   fr units -- on a long table (e.g. 56 line items) those two were shrinking
+   enough to truncate full currency values ("3." instead of "312.50").
+   Description/vendor-part# still flex to fill remaining space. */
+.line-item-row {
+  display: grid;
+  grid-template-columns: minmax(0,2fr) minmax(90px,1fr) minmax(64px,0.7fr) minmax(100px,1.1fr) minmax(100px,1.1fr) minmax(60px,0.6fr);
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.line-item-head {
+  display: grid;
+  grid-template-columns: minmax(0,2fr) minmax(90px,1fr) minmax(64px,0.7fr) minmax(100px,1.1fr) minmax(100px,1.1fr) minmax(60px,0.6fr);
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 0 2px 6px;
+}
 
 .btn-ghost { font-family: inherit; font-size: 11px; padding: 5px 10px; border-radius: 6px; border: 0.5px solid var(--border-strong); background: #fff; color: var(--text-secondary); cursor: pointer; }
 .btn-ghost:hover { background: #F9FAFB; }

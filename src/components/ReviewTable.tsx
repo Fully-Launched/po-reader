@@ -93,6 +93,18 @@ function computeAccuracyIssues(invoice: ExtractedInvoice): string[] {
   return issues;
 }
 
+// Splits a message into a bold "what's wrong" lead sentence and a non-bold
+// "what to do about it" remainder, per error-messages.ts's own two-part
+// style guide (state what's wrong, then the actionable next step). Used to
+// restructure submitError.message -- server-generated, real content, not
+// hardcoded -- into the bold/non-bold banner format below without losing
+// any of it. Falls back to treating the whole message as the lead if it
+// doesn't contain a natural sentence break.
+function splitBannerLead(message: string): { lead: string; rest: string } {
+  const match = message.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/);
+  return match ? { lead: match[1], rest: match[2] } : { lead: message, rest: "" };
+}
+
 // Generic loader for the Business Unit / Inventory Location dropdowns --
 // both follow the identical fetch-on-mount / loading / error / empty /
 // auto-select-single-option pattern, just against different endpoints.
@@ -569,51 +581,59 @@ export function ReviewTable({ invoice, docInfo, onConfirm, onCancel, cancelLabel
             </div>
           </div>
     
-          {/* Live math reconciliation (computeAccuracyIssues above) -- ported
-              from po-generator-draft.html's runAccuracyCheck. Deliberately a
-              SEPARATE banner from the extraction-confidence one below: this is
-              pure arithmetic on the current draft values, not a statement about
-              what Claude was confident about. WARNING ONLY -- never disables
-              the submit button below, unlike the mockup. */}
-          {accuracyIssues.length === 0 ? (
-            <div className="banner banner-success">
-              <i className="ti ti-shield-check" />
-              Numbers reconcile -- line items match subtotal, and subtotal + tax matches total
-            </div>
-          ) : (
+          {/* Single status banner -- exactly one shown at a time, prioritized
+              red (submission error) > yellow (numbers don't reconcile, or a
+              line item flagged low-confidence) > green (neither). This
+              replaces three banners that used to render independently (and
+              could show two greens at once, or a green next to an amber):
+              the submission-error banner that used to sit near the submit
+              button below, the live math-reconciliation banner
+              (computeAccuracyIssues), and the extraction-confidence banner
+              (reviewWarnings). WARNING ONLY when yellow -- still never
+              disables the submit button; only hasRequiredFields() (via
+              canSubmit below) gates submission. */}
+          {submitError ? (
+            (() => {
+              const { lead, rest } = splitBannerLead(submitError.message);
+              return (
+                <div className="banner banner-error">
+                  <i className="ti ti-alert-circle" />
+                  <div>
+                    <strong>{lead}</strong>
+                    {rest && <> {rest}</>}
+                  </div>
+                </div>
+              );
+            })()
+          ) : accuracyIssues.length > 0 || warnings.length > 0 ? (
             <div className="banner banner-warning">
               <i className="ti ti-alert-triangle" />
               <div>
-                Numbers don&apos;t reconcile -- review before submitting:
-                <ul>
-                  {accuracyIssues.map((issue) => (
-                    <li key={issue}>{issue}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          )}
-    
-          {warnings.length === 0 ? (
-            <div className="banner banner-success">
-              <i className="ti ti-shield-check" />
-              Accuracy check passed -- no issues flagged
-            </div>
-          ) : (
-            <div className="banner banner-warning">
-              <i className="ti ti-alert-triangle" />
-              <div>
-                Flagged for review -- please check before submitting:
-                <ul>
-                  {warnings.map((warning) => (
-                    <li key={warning}>{warning}</li>
-                  ))}
-                </ul>
+                <strong>{accuracyIssues.length > 0 ? "Numbers don't reconcile" : "Flagged for review"}</strong>{" "}
+                {(() => {
+                  const issues = [...accuracyIssues, ...warnings];
+                  return issues.length === 1 ? (
+                    issues[0]
+                  ) : (
+                    <ul>
+                      {issues.map((issue) => (
+                        <li key={issue}>{issue}</li>
+                      ))}
+                    </ul>
+                  );
+                })()}
                 {draft.notes && <div>{draft.notes}</div>}
               </div>
             </div>
+          ) : (
+            <div className="banner banner-success">
+              <i className="ti ti-shield-check" />
+              <div>
+                <strong>Accuracy check passed:</strong> No issues flagged.
+              </div>
+            </div>
           )}
-    
+
           <div className="card grid-3">
             <IdNameSelect
               label="Business Unit"
@@ -647,13 +667,6 @@ export function ReviewTable({ invoice, docInfo, onConfirm, onCancel, cancelLabel
             </div>
           </div>
     
-          {submitError && (
-            <div className="banner banner-error">
-              <i className="ti ti-alert-circle" />
-              {submitError.message}
-            </div>
-          )}
-
           <button
             type="button"
             className="btn-primary"
