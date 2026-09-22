@@ -93,33 +93,41 @@ function computeAccuracyIssues(invoice: ExtractedInvoice): string[] {
   return issues;
 }
 
-// Splits a message into a bold "what's wrong" lead sentence and a non-bold
-// "what to do about it" remainder, per error-messages.ts's own two-part
-// style guide (state what's wrong, then the actionable next step). Used to
-// restructure submitError.message -- server-generated, real content, not
-// hardcoded -- into the bold/non-bold banner format below without losing
-// any of it. Falls back to treating the whole message as the lead if it
-// doesn't contain a natural sentence break.
+// Splits a message into a bold "what's wrong" lead and a non-bold "what to
+// do about it" remainder. This app's error messages use TWO different
+// separator conventions depending on where they're built: a sentence break
+// (". ") for some (e.g. create-po/route.ts's job-not-found message: `No
+// ServiceTitan job found... "1717". Job attachment is required -- correct
+// the project number...`), and error-messages.ts's canonical " -- " for
+// others with no sentence break at all (e.g. notFoundError()'s vendor-not-
+// found message: `No ServiceTitan vendor found matching "X" -- correct the
+// vendor name..., or this vendor may need to be added...`).
+//
+// A single fixed-priority split (e.g. "always try '.' first") breaks one
+// case or the other: dash-first would pull "Job attachment is required"
+// into the bold lead for the job message; period-first leaves the vendor
+// message entirely unsplit, since it has no period before its "--" (its
+// only period is the final one, at the very end).
+//
+// Instead, try BOTH separators and take whichever occurs EARLIER in the
+// string -- the shorter candidate lead wins. That's "-- correct the
+// vendor name..." (dash, occurs early) for the vendor message, and
+// '. Job attachment...' (period, occurs before the dash) for the job
+// message, without hardcoding which message uses which convention. Falls
+// back to treating the whole message as the lead if neither separator is
+// present at all.
 function splitBannerLead(message: string): { lead: string; rest: string } {
-  const match = message.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/);
-  return match ? { lead: match[1], rest: match[2] } : { lead: message, rest: "" };
-}
+  const sentenceMatch = message.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/);
+  const dashMatch = message.match(/^([\s\S]*?)\s+--\s+([\s\S]*)$/);
 
-// Splits on the first " -- " -- the project's canonical "what's wrong --
-// what to do" separator (see error-messages.ts's style guide), falling
-// back to splitBannerLead's sentence-based split, then to the whole
-// message as the lead. Kept SEPARATE from splitBannerLead rather than
-// reordering it: a submitError message can have a sentence break BEFORE
-// its own " -- " (e.g. `No ServiceTitan job found... "1717". Job
-// attachment is required -- correct the project number...`), and
-// dash-first splitting there would pull "Job attachment is required" into
-// the bold lead -- a regression on banner A's already-verified behavior.
-// This is for reviewWarnings()' plain dash-separated messages instead (no
-// sentence punctuation to split on at all), used by
-// buildExtractionNotes() below.
-function splitDashLead(message: string): { lead: string; rest: string } {
-  const match = message.match(/^([\s\S]*?)\s+--\s+([\s\S]*)$/);
-  return match ? { lead: match[1], rest: match[2] } : splitBannerLead(message);
+  if (sentenceMatch && dashMatch) {
+    return sentenceMatch[1].length <= dashMatch[1].length
+      ? { lead: sentenceMatch[1], rest: sentenceMatch[2] }
+      : { lead: dashMatch[1], rest: dashMatch[2] };
+  }
+  if (sentenceMatch) return { lead: sentenceMatch[1], rest: sentenceMatch[2] };
+  if (dashMatch) return { lead: dashMatch[1], rest: dashMatch[2] };
+  return { lead: message, rest: "" };
 }
 
 /**
@@ -148,7 +156,7 @@ function buildExtractionNotes(
     });
   }
   for (const warning of warnings) {
-    const { lead, rest } = splitDashLead(warning);
+    const { lead, rest } = splitBannerLead(warning);
     notes.push({ headline: lead, detail: rest });
   }
   return notes;
