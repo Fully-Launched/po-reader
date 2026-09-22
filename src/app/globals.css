@@ -39,7 +39,11 @@ body {
 
 .app-shell {
   width: 100%;
-  max-width: 760px;
+  /* Widened from 760px -- the two-pane review layout (doc-panel + form)
+     and the vertical sidebar nav both need more horizontal room than a
+     single narrow centered card did; this also addresses earlier feedback
+     about excess grey space around the shell. */
+  max-width: 960px;
   display: flex;
   border-radius: 14px;
   overflow: hidden;
@@ -48,21 +52,40 @@ body {
   background: var(--bg);
 }
 
-.nav-rail {
-  width: 56px;
+/* Single vertical nav, replacing the old icon-only nav-rail + top tabs bar
+   (which duplicated the same three destinations). Gating (disabled state)
+   is driven by InvoiceUploader.tsx's existing canGoTo() logic, unchanged --
+   only the markup/styling moved here. */
+.sidebar-nav {
+  width: 180px;
   background: var(--navy);
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding: 20px 0;
-  gap: 24px;
+  padding: 20px 12px;
+  gap: 4px;
   flex-shrink: 0;
 }
-.nav-rail i { font-size: 20px; color: var(--navy-icon); cursor: pointer; transition: color 0.15s; }
-.nav-rail i.active { color: #fff; }
-.nav-rail i:hover { color: #fff; }
-.nav-rail i.disabled { cursor: not-allowed; opacity: 0.5; }
-.nav-rail i.disabled:hover { color: var(--navy-icon); }
+.sidebar-nav .nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--navy-icon);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s, background 0.15s;
+}
+.sidebar-nav .nav-item i { font-size: 16px; }
+.sidebar-nav .nav-item.active { color: #fff; background: rgba(255, 255, 255, 0.12); }
+.sidebar-nav .nav-item:hover:not(:disabled):not(.active) { color: #fff; background: rgba(255, 255, 255, 0.06); }
+.sidebar-nav .nav-item:disabled { color: #454C5C; cursor: not-allowed; }
 
 .content {
   flex: 1;
@@ -141,6 +164,57 @@ header.app-header {
 
 .section-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
 
+/* Two-pane review layout, ported from po-generator-draft.html's doc-panel. */
+.review-layout { display: flex; gap: 16px; flex: 1; min-height: 0; }
+.doc-panel {
+  width: 220px;
+  flex-shrink: 0;
+  background: #F9FAFB;
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-self: flex-start;
+}
+.doc-preview {
+  background: #fff;
+  border: 0.5px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 2rem 1rem;
+  aspect-ratio: 3 / 4;
+}
+.doc-preview i { font-size: 30px; color: var(--text-muted); }
+.doc-preview .fname { font-size: 12px; color: var(--text-secondary); text-align: center; word-break: break-all; }
+.doc-preview .fmeta { font-size: 11px; color: var(--text-muted); }
+.doc-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--teal-text); }
+.doc-status i { font-size: 14px; }
+.review-form { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+/* Dashboard placeholder for when there's no activity history to show yet --
+   see InvoiceUploader.tsx's DashboardScreen. Always rendered as a plain
+   empty state, never a populated/faked log -- this app has no persistence
+   layer to back a real one (see CLAUDE.md). */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 2rem 1rem;
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 1.25rem;
+}
+.empty-state i { font-size: 26px; color: var(--text-muted); margin-bottom: 10px; }
+.empty-state .title { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.empty-state .sub { font-size: 12px; color: var(--text-muted); }
+
 .log-list { border: 0.5px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 1.25rem; }
 .log-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 0.5px solid var(--border); font-size: 13px; }
 .log-row:last-child { border-bottom: none; }
@@ -214,3 +288,22 @@ footer.app-footer { text-align: right; margin-top: auto; padding-top: 1.25rem; f
 .confirm-row span:first-child { color: var(--text-secondary); }
 .confirm-row span:last-child { font-family: 'IBM Plex Mono', monospace; }
 .confirm-actions { display: flex; gap: 10px; width: 100%; }
+
+/* Keyboard-focus visibility -- didn't exist anywhere in this app before.
+   The dropzone itself isn't focusable (its real focus target is the
+   overlaid <input type="file">, see .dropzone input[type="file"] above),
+   so it uses :focus-within instead of :focus-visible: this shows the same
+   outline around the whole dropzone when a keyboard user tabs to the
+   file input inside it. .log-row.clickable is included for when a real,
+   clickable activity-log row exists (see the Dashboard empty-state note
+   above) -- no such element is rendered yet. */
+button:focus-visible,
+.nav-item:focus-visible,
+.log-row.clickable:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.dropzone:focus-within {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}

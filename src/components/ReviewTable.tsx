@@ -17,6 +17,12 @@ export interface SubmitError {
 
 export interface ReviewTableProps {
   invoice: ExtractedInvoice;
+  // Source-document side panel (filename + page count) shown alongside the
+  // form, ported from po-generator-draft.html's doc-panel. pageCount is
+  // null when it genuinely isn't known (shouldn't normally happen -- both
+  // call sites in InvoiceUploader.tsx derive it from the detected invoice
+  // boundary -- but rendered as "--" rather than a false "0 pages" if it is).
+  docInfo: { filename: string; pageCount: number | null };
   onConfirm: (
     invoice: ExtractedInvoice,
     businessUnitId: number,
@@ -50,6 +56,41 @@ function todayLocalDate(): string {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+// Live math reconciliation, ported from po-generator-draft.html's
+// runAccuracyCheck -- recomputed from the current draft on every render
+// (cheap: a couple of sums over at most a few dozen line items), not
+// memoized or debounced. Distinct from reviewWarnings() (per-line-item
+// extraction-confidence flags): this is purely arithmetic and doesn't know
+// or care whether a value was extracted or hand-typed.
+//
+// WARNING ONLY -- deliberately does NOT gate submission. Unlike the
+// mockup (which disabled its submit button on any issue here), a
+// subtotal/total mismatch is often legitimate (e.g. freight or a
+// vendor-applied discount not broken out per line) and the user may have
+// already reviewed and confirmed it's fine. hasRequiredFields() below is
+// the only real submission gate.
+function computeAccuracyIssues(invoice: ExtractedInvoice): string[] {
+  const issues: string[] = [];
+
+  const lineSum = invoice.lineItems.reduce((sum, item) => sum + item.total, 0);
+  const lineDiff = Math.round((lineSum - invoice.subtotal) * 100) / 100;
+  if (Math.abs(lineDiff) > 0.01) {
+    issues.push(
+      `Line items sum to $${lineSum.toFixed(2)}, but subtotal shows $${invoice.subtotal.toFixed(2)} (off by $${Math.abs(lineDiff).toFixed(2)})`,
+    );
+  }
+
+  const tax = invoice.taxAmount ?? 0;
+  const totalDiff = Math.round((invoice.subtotal + tax - invoice.total) * 100) / 100;
+  if (Math.abs(totalDiff) > 0.01) {
+    issues.push(
+      `Subtotal + tax = $${(invoice.subtotal + tax).toFixed(2)}, but total shows $${invoice.total.toFixed(2)} (off by $${Math.abs(totalDiff).toFixed(2)})`,
+    );
+  }
+
+  return issues;
 }
 
 // Generic loader for the Business Unit / Inventory Location dropdowns --
@@ -177,7 +218,7 @@ const VISIBLE_LINE_ITEM_LIMIT = 3; // matches the "+N more line items" treatment
 // src/lib/servicetitan/payload-builder.ts). The one exception is a document
 // that isn't an invoice at all (e.g. an internal memo) -- there's no
 // partial data worth editing, so that case hard-blocks below.
-export function ReviewTable({ invoice, onConfirm, onCancel, cancelLabel, submitting, submitError }: ReviewTableProps) {
+export function ReviewTable({ invoice, docInfo, onConfirm, onCancel, cancelLabel, submitting, submitError }: ReviewTableProps) {
   const [draft, setDraft] = useState<ExtractedInvoice>(invoice);
   const [showAllLineItems, setShowAllLineItems] = useState(false);
   // Defaults to today but is genuinely editable, including backdating --
@@ -257,6 +298,7 @@ export function ReviewTable({ invoice, onConfirm, onCancel, cancelLabel, submitt
   }
 
   const warnings = reviewWarnings(draft);
+  const accuracyIssues = computeAccuracyIssues(draft);
   const idFilled = (id: string) => id.trim() !== "" && !Number.isNaN(Number(id));
   const canSubmit =
     !submitting &&
@@ -283,7 +325,19 @@ export function ReviewTable({ invoice, onConfirm, onCancel, cancelLabel, submitt
   function updateLineItem<K extends keyof InvoiceLineItem>(index: number, key: K, value: InvoiceLineItem[K]) {
     setDraft((prev) => ({
       ...prev,
-      lineItems: prev.lineItems.map((item, i) => (i === index ? { ...item, [key]: value } : item)),
+      lineItems: prev.lineItems.map((item, i) => {
+        if (i !== index) return item;
+        const updated = { ...item, [key]: value };
+        // Auto-recalculate this row's Total from Qty x Price whenever
+        // either changes -- ported from po-generator-draft.html's
+        // recalcLineTotal. Editing Total directly still works (it's just
+        // not protected from being overwritten by a later qty/price edit,
+        // same as the mockup).
+        if (key === "quantity" || key === "unitPrice") {
+          updated.total = Math.round(updated.quantity * updated.unitPrice * 100) / 100;
+        }
+        return updated;
+      }),
     }));
   }
 
@@ -296,276 +350,322 @@ export function ReviewTable({ invoice, onConfirm, onCancel, cancelLabel, submitt
     setDraft((prev) => ({ ...prev, lineItems: prev.lineItems.filter((_, i) => i !== index) }));
   }
 
-  // TODO: recompute subtotal/total automatically as line items are edited --
-  // currently these are direct editable fields, matching what the user typed
-  // rather than a derived value.
-
   const visibleLineItems =
     showAllLineItems ? draft.lineItems : draft.lineItems.slice(0, VISIBLE_LINE_ITEM_LIMIT);
   const hiddenCount = draft.lineItems.length - visibleLineItems.length;
 
   return (
     <div className="screen">
-      <div className="card grid-2">
-        <div>
-          <label>Vendor name</label>
-          <input
-            className="mono"
-            placeholder="Enter vendor name"
-            value={draft.vendorName}
-            onChange={(e) => updateField("vendorName", e.target.value)}
-            aria-invalid={vendorNameInvalid}
-            style={invalidFieldStyle(vendorNameInvalid)}
-          />
-        </div>
-        <div>
-          <label>Invoice #</label>
-          <input
-            className="mono"
-            placeholder="Invoice number"
-            value={draft.invoiceNumber}
-            onChange={(e) => updateField("invoiceNumber", e.target.value)}
-          />
-        </div>
-        <div>
-          <label>Invoice date</label>
-          <input
-            className="mono"
-            placeholder="YYYY-MM-DD"
-            value={draft.invoiceDate}
-            onChange={(e) => updateField("invoiceDate", e.target.value)}
-          />
-        </div>
-        <div>
-          <label>Project / job number</label>
-          <input
-            className="mono"
-            placeholder="Required -- must match an existing ServiceTitan job"
-            value={draft.projectNumber ?? ""}
-            onChange={(e) => updateField("projectNumber", e.target.value.trim() === "" ? null : e.target.value)}
-            aria-invalid={projectNumberInvalid}
-            style={invalidFieldStyle(projectNumberInvalid)}
-          />
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="section-label">Line items &middot; {draft.lineItems.length} total</div>
-        <div className="line-item-head">
-          <span>Description</span>
-          <span>Vendor part #</span>
-          <span>Qty</span>
-          <span>Unit price</span>
-          <span>Total</span>
-          <span></span>
-        </div>
-        {visibleLineItems.map((item) => {
-          const i = draft.lineItems.indexOf(item);
-          return (
-            <div
-              className="line-item-row"
-              key={i}
-              // Per-item low-confidence flag from extraction (distinct from
-              // the whole-document extractionConfidence banner) -- amber
-              // left border puts the user's eye on exactly which row to
-              // double-check against the source PDF, not just a generic
-              // warning banner with no row-level indication.
-              style={item.lowConfidence ? { borderLeft: "3px solid var(--amber-text)", paddingLeft: 6 } : undefined}
-              title={item.lowConfidence ? "Low extraction confidence -- verify against the original PDF" : undefined}
-            >
-              <input
-                placeholder="Item description"
-                value={item.description}
-                onChange={(e) => updateLineItem(i, "description", e.target.value)}
-                aria-invalid={!item.description.trim()}
-                style={invalidFieldStyle(!item.description.trim())}
-              />
-              <input
-                placeholder="If any"
-                value={item.vendorPartNumber ?? ""}
-                onChange={(e) => updateLineItem(i, "vendorPartNumber", e.target.value.trim() === "" ? null : e.target.value)}
-              />
-              <input
-                className="mono"
-                type="number"
-                value={item.quantity}
-                onChange={(e) => updateLineItem(i, "quantity", Number(e.target.value))}
-                aria-invalid={item.quantity <= 0}
-                style={invalidFieldStyle(item.quantity <= 0)}
-              />
-              <input
-                className="mono"
-                type="number"
-                value={item.unitPrice}
-                onChange={(e) => updateLineItem(i, "unitPrice", Number(e.target.value))}
-              />
-              <input
-                className="mono"
-                type="number"
-                value={item.total}
-                onChange={(e) => updateLineItem(i, "total", Number(e.target.value))}
-              />
-              <button type="button" className="btn-ghost" onClick={() => removeLineItem(i)}>
-                Remove
-              </button>
+      {/* Two-pane layout ported from po-generator-draft.html's doc-panel --
+          shows what's actually being reviewed (filename, page count within
+          the source PDF, extraction status) alongside the form, and fills
+          the available width better than a single narrow centered card. */}
+      <div className="review-layout">
+        <div className="doc-panel">
+          <div className="section-label" style={{ marginBottom: 0 }}>
+            Source document
+          </div>
+          <div className="doc-preview">
+            <i className="ti ti-file-invoice" />
+            <div className="fname">{docInfo.filename}</div>
+            <div className="fmeta">
+              {docInfo.pageCount != null ? `${docInfo.pageCount} page${docInfo.pageCount === 1 ? "" : "s"}` : "--"}
             </div>
-          );
-        })}
-        {hiddenCount > 0 && (
-          <div className="more-items">
-            <button type="button" className="btn-ghost" onClick={() => setShowAllLineItems(true)}>
-              + {hiddenCount} more line item{hiddenCount === 1 ? "" : "s"}
-            </button>
           </div>
-        )}
-        <button type="button" className="btn-add" onClick={addLineItem}>
-          Add line item
-        </button>
-
-        {/* Pricebook match-count indicator -- only meaningful for vendors whose
-            strategy actually runs per-item matching against the Pricebook
-            (TEC-style catch-all). Bulk-consolidation vendors (Arco/Supply House)
-            always collapse into one line, so matchSummary is null there and
-            nothing renders; "strict"-strategy matchSummary is also suppressed
-            here since its only successful outcome is a trivial all-matched
-            case with no "added to bulk material" line to report. */}
-        {matchSummaryLoading && (
-          <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>Checking Pricebook matches...</p>
-        )}
-        {!matchSummaryLoading && matchSummary?.strategy === "catch-all" && (
-          <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
-            {matchSummary.matchedCount}/{matchSummary.totalItems} items matched to Pricebook,{" "}
-            {matchSummary.catchAllCount}/{matchSummary.totalItems} added to bulk material
-            {" -- "}
-            <button
-              type="button"
-              className="btn-ghost"
-              style={{ fontSize: 12, padding: 0 }}
-              onClick={() => checkLineItemMatches(draft.vendorName, draft.lineItems)}
-            >
-              Recheck
-            </button>
-          </p>
-        )}
-        {!matchSummaryLoading && matchSummaryError && (
-          <p role="alert" style={{ fontSize: 12, color: "var(--red-text)", marginTop: 10 }}>
-            Couldn&apos;t check Pricebook matches: {matchSummaryError}
-          </p>
-        )}
-      </div>
-
-      <div className="card grid-2">
-        <div>
-          <label>Subtotal</label>
-          <input
-            className="mono"
-            type="number"
-            value={draft.subtotal}
-            onChange={(e) => updateField("subtotal", Number(e.target.value))}
-          />
-        </div>
-        <div>
-          <label>Tax</label>
-          <input
-            className="mono"
-            type="number"
-            placeholder="n/a"
-            value={draft.taxAmount ?? ""}
-            onChange={(e) => updateField("taxAmount", e.target.value === "" ? null : Number(e.target.value))}
-          />
-        </div>
-        <div>
-          <label>Total</label>
-          <input
-            className="mono"
-            type="number"
-            style={{ fontWeight: 500 }}
-            value={draft.total}
-            onChange={(e) => updateField("total", Number(e.target.value))}
-          />
-        </div>
-        <div>
-          <label>Freight / shipping</label>
-          <input
-            className="mono"
-            type="number"
-            placeholder="0.00"
-            value={draft.freightAmount ?? ""}
-            onChange={(e) => updateField("freightAmount", e.target.value === "" ? null : Number(e.target.value))}
-          />
-        </div>
-      </div>
-
-      {warnings.length === 0 ? (
-        <div className="banner banner-success">
-          <i className="ti ti-shield-check" />
-          Accuracy check passed -- no issues flagged
-        </div>
-      ) : (
-        <div className="banner banner-warning">
-          <i className="ti ti-alert-triangle" />
-          <div>
-            Flagged for review -- please check before submitting:
-            <ul>
-              {warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-            {draft.notes && <div>{draft.notes}</div>}
+          <div className="doc-status">
+            <i className="ti ti-check" />
+            Read by Claude
           </div>
         </div>
-      )}
 
-      <div className="card grid-3">
-        <IdNameSelect
-          label="Business Unit"
-          options={businessUnit.options}
-          error={businessUnit.error}
-          selectedId={businessUnit.selectedId}
-          onChange={businessUnit.setSelectedId}
-          emptyMessage="No business units found for this tenant."
-          disabled={submitting}
-        />
-        <IdNameSelect
-          label="Inventory Location"
-          options={inventoryLocation.options}
-          error={inventoryLocation.error}
-          selectedId={inventoryLocation.selectedId}
-          onChange={inventoryLocation.setSelectedId}
-          emptyMessage="No inventory locations found for this tenant."
-          disabled={submitting}
-        />
-        <div>
-          <label>Required on</label>
-          {/* No min attribute -- confirmed with the client this needs to
-              allow backdating, not just today/future dates. */}
-          <input
-            className="mono"
-            type="date"
-            value={requiredOn}
-            onChange={(e) => setRequiredOn(e.target.value)}
-            disabled={submitting}
-          />
+        <div className="review-form">
+          <div className="card grid-2">
+            <div>
+              <label>Vendor name</label>
+              <input
+                className="mono"
+                placeholder="Enter vendor name"
+                value={draft.vendorName}
+                onChange={(e) => updateField("vendorName", e.target.value)}
+                aria-invalid={vendorNameInvalid}
+                style={invalidFieldStyle(vendorNameInvalid)}
+              />
+            </div>
+            <div>
+              <label>Invoice #</label>
+              <input
+                className="mono"
+                placeholder="Invoice number"
+                value={draft.invoiceNumber}
+                onChange={(e) => updateField("invoiceNumber", e.target.value)}
+              />
+            </div>
+            <div>
+              <label>Invoice date</label>
+              <input
+                className="mono"
+                placeholder="YYYY-MM-DD"
+                value={draft.invoiceDate}
+                onChange={(e) => updateField("invoiceDate", e.target.value)}
+              />
+            </div>
+            <div>
+              <label>Project / job number</label>
+              <input
+                className="mono"
+                placeholder="Required -- must match an existing ServiceTitan job"
+                value={draft.projectNumber ?? ""}
+                onChange={(e) => updateField("projectNumber", e.target.value.trim() === "" ? null : e.target.value)}
+                aria-invalid={projectNumberInvalid}
+                style={invalidFieldStyle(projectNumberInvalid)}
+              />
+            </div>
+          </div>
+    
+          <div className="card">
+            <div className="section-label">Line items &middot; {draft.lineItems.length} total</div>
+            <div className="line-item-head">
+              <span>Description</span>
+              <span>Vendor part #</span>
+              <span>Qty</span>
+              <span>Unit price</span>
+              <span>Total</span>
+              <span></span>
+            </div>
+            {visibleLineItems.map((item) => {
+              const i = draft.lineItems.indexOf(item);
+              return (
+                <div
+                  className="line-item-row"
+                  key={i}
+                  // Per-item low-confidence flag from extraction (distinct from
+                  // the whole-document extractionConfidence banner) -- amber
+                  // left border puts the user's eye on exactly which row to
+                  // double-check against the source PDF, not just a generic
+                  // warning banner with no row-level indication.
+                  style={item.lowConfidence ? { borderLeft: "3px solid var(--amber-text)", paddingLeft: 6 } : undefined}
+                  title={item.lowConfidence ? "Low extraction confidence -- verify against the original PDF" : undefined}
+                >
+                  <input
+                    placeholder="Item description"
+                    value={item.description}
+                    onChange={(e) => updateLineItem(i, "description", e.target.value)}
+                    aria-invalid={!item.description.trim()}
+                    style={invalidFieldStyle(!item.description.trim())}
+                  />
+                  <input
+                    placeholder="If any"
+                    value={item.vendorPartNumber ?? ""}
+                    onChange={(e) => updateLineItem(i, "vendorPartNumber", e.target.value.trim() === "" ? null : e.target.value)}
+                  />
+                  <input
+                    className="mono"
+                    type="number"
+                    value={item.quantity}
+                    onChange={(e) => updateLineItem(i, "quantity", Number(e.target.value))}
+                    aria-invalid={item.quantity <= 0}
+                    style={invalidFieldStyle(item.quantity <= 0)}
+                  />
+                  <input
+                    className="mono"
+                    type="number"
+                    value={item.unitPrice}
+                    onChange={(e) => updateLineItem(i, "unitPrice", Number(e.target.value))}
+                  />
+                  <input
+                    className="mono"
+                    type="number"
+                    value={item.total}
+                    onChange={(e) => updateLineItem(i, "total", Number(e.target.value))}
+                  />
+                  <button type="button" className="btn-ghost" onClick={() => removeLineItem(i)}>
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
+            {hiddenCount > 0 && (
+              <div className="more-items">
+                <button type="button" className="btn-ghost" onClick={() => setShowAllLineItems(true)}>
+                  + {hiddenCount} more line item{hiddenCount === 1 ? "" : "s"}
+                </button>
+              </div>
+            )}
+            <button type="button" className="btn-add" onClick={addLineItem}>
+              Add line item
+            </button>
+    
+            {/* Pricebook match-count indicator -- only meaningful for vendors whose
+                strategy actually runs per-item matching against the Pricebook
+                (TEC-style catch-all). Bulk-consolidation vendors (Arco/Supply House)
+                always collapse into one line, so matchSummary is null there and
+                nothing renders; "strict"-strategy matchSummary is also suppressed
+                here since its only successful outcome is a trivial all-matched
+                case with no "added to bulk material" line to report. */}
+            {matchSummaryLoading && (
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>Checking Pricebook matches...</p>
+            )}
+            {!matchSummaryLoading && matchSummary?.strategy === "catch-all" && (
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
+                {matchSummary.matchedCount}/{matchSummary.totalItems} items matched to Pricebook,{" "}
+                {matchSummary.catchAllCount}/{matchSummary.totalItems} added to bulk material
+                {" -- "}
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  style={{ fontSize: 12, padding: 0 }}
+                  onClick={() => checkLineItemMatches(draft.vendorName, draft.lineItems)}
+                >
+                  Recheck
+                </button>
+              </p>
+            )}
+            {!matchSummaryLoading && matchSummaryError && (
+              <p role="alert" style={{ fontSize: 12, color: "var(--red-text)", marginTop: 10 }}>
+                Couldn&apos;t check Pricebook matches: {matchSummaryError}
+              </p>
+            )}
+          </div>
+    
+          <div className="card grid-2">
+            <div>
+              <label>Subtotal</label>
+              <input
+                className="mono"
+                type="number"
+                value={draft.subtotal}
+                onChange={(e) => updateField("subtotal", Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label>Tax</label>
+              <input
+                className="mono"
+                type="number"
+                placeholder="n/a"
+                value={draft.taxAmount ?? ""}
+                onChange={(e) => updateField("taxAmount", e.target.value === "" ? null : Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label>Total</label>
+              <input
+                className="mono"
+                type="number"
+                style={{ fontWeight: 500 }}
+                value={draft.total}
+                onChange={(e) => updateField("total", Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label>Freight / shipping</label>
+              <input
+                className="mono"
+                type="number"
+                placeholder="0.00"
+                value={draft.freightAmount ?? ""}
+                onChange={(e) => updateField("freightAmount", e.target.value === "" ? null : Number(e.target.value))}
+              />
+            </div>
+          </div>
+    
+          {/* Live math reconciliation (computeAccuracyIssues above) -- ported
+              from po-generator-draft.html's runAccuracyCheck. Deliberately a
+              SEPARATE banner from the extraction-confidence one below: this is
+              pure arithmetic on the current draft values, not a statement about
+              what Claude was confident about. WARNING ONLY -- never disables
+              the submit button below, unlike the mockup. */}
+          {accuracyIssues.length === 0 ? (
+            <div className="banner banner-success">
+              <i className="ti ti-shield-check" />
+              Numbers reconcile -- line items match subtotal, and subtotal + tax matches total
+            </div>
+          ) : (
+            <div className="banner banner-warning">
+              <i className="ti ti-alert-triangle" />
+              <div>
+                Numbers don&apos;t reconcile -- review before submitting:
+                <ul>
+                  {accuracyIssues.map((issue) => (
+                    <li key={issue}>{issue}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+    
+          {warnings.length === 0 ? (
+            <div className="banner banner-success">
+              <i className="ti ti-shield-check" />
+              Accuracy check passed -- no issues flagged
+            </div>
+          ) : (
+            <div className="banner banner-warning">
+              <i className="ti ti-alert-triangle" />
+              <div>
+                Flagged for review -- please check before submitting:
+                <ul>
+                  {warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+                {draft.notes && <div>{draft.notes}</div>}
+              </div>
+            </div>
+          )}
+    
+          <div className="card grid-3">
+            <IdNameSelect
+              label="Business Unit"
+              options={businessUnit.options}
+              error={businessUnit.error}
+              selectedId={businessUnit.selectedId}
+              onChange={businessUnit.setSelectedId}
+              emptyMessage="No business units found for this tenant."
+              disabled={submitting}
+            />
+            <IdNameSelect
+              label="Inventory Location"
+              options={inventoryLocation.options}
+              error={inventoryLocation.error}
+              selectedId={inventoryLocation.selectedId}
+              onChange={inventoryLocation.setSelectedId}
+              emptyMessage="No inventory locations found for this tenant."
+              disabled={submitting}
+            />
+            <div>
+              <label>Required on</label>
+              {/* No min attribute -- confirmed with the client this needs to
+                  allow backdating, not just today/future dates. */}
+              <input
+                className="mono"
+                type="date"
+                value={requiredOn}
+                onChange={(e) => setRequiredOn(e.target.value)}
+                disabled={submitting}
+              />
+            </div>
+          </div>
+    
+          {submitError && (
+            <div className="banner banner-error">
+              <i className="ti ti-alert-circle" />
+              {submitError.message}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!canSubmit}
+            onClick={() =>
+              onConfirm(draft, Number(businessUnit.selectedId), Number(inventoryLocation.selectedId), requiredOn)
+            }
+          >
+            {submitting ? "Creating purchase order..." : "Create purchase order"}
+          </button>
         </div>
       </div>
-
-      {submitError && (
-        <div className="banner banner-error">
-          <i className="ti ti-alert-circle" />
-          {submitError.message}
-        </div>
-      )}
-
-      <button
-        type="button"
-        className="btn-primary"
-        disabled={!canSubmit}
-        onClick={() =>
-          onConfirm(draft, Number(businessUnit.selectedId), Number(inventoryLocation.selectedId), requiredOn)
-        }
-      >
-        {submitting ? "Creating purchase order..." : "Create purchase order"}
-      </button>
     </div>
   );
 }

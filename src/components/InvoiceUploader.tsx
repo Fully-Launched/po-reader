@@ -4,21 +4,30 @@ import { useRef, useState } from "react";
 import type { ExtractedInvoice, InvoiceBoundary } from "@/lib/types";
 import { ReviewTable, type ReviewTableProps, type SubmitError } from "./ReviewTable";
 
-// Top-level app shell, layout ported from po-generator-draft.html (design
-// mockup): nav-rail + tabs + branded header + one of three screens +
-// footer. Drives the upload -> extract -> review -> submit flow described
-// in CLAUDE.md.
+// Top-level app shell: vertical sidebar nav + branded header + one of three
+// screens + footer. Drives the upload -> extract -> review -> submit flow
+// described in CLAUDE.md.
+//
+// Layout originally ported from po-generator-draft.html (design mockup),
+// then reworked in a later pass: the mockup's icon-only nav-rail and top
+// tabs bar showed the same three destinations (Dashboard / Review invoice /
+// Confirmation) twice, so they were merged into a single vertical nav in
+// the left sidebar -- see the sidebar-nav markup below and its styles in
+// globals.css. The gating logic itself (canGoTo) carried over unchanged.
 //
 // Deliberate departures from the mockup (a static demo, freely clickable
 // between screens):
-//   - Tabs/nav-rail are gated by real progress -- you can't jump to "Review
-//     invoice" before an invoice is loaded, or "Confirmation" before a PO
-//     actually exists. See canGoTo() below.
+//   - The sidebar nav is gated by real progress -- you can't jump to
+//     "Review invoice" before an invoice is loaded, or "Confirmation"
+//     before a PO actually exists. See canGoTo() below. The mockup's
+//     equivalent (nav-rail + tabs) was looser: it unlocked Confirmation the
+//     moment any invoice loaded, before a PO existed. Not adopted -- ours
+//     is stricter and correct as-is.
 //   - The mockup's Dashboard screen has a "This week" activity log with
 //     example rows (Arco Supply INV-23538, etc.). This app has no
-//     persistence layer to back a real activity log, so it's omitted rather
-//     than showing fabricated history -- add it back once there's a real
-//     data source. (The mockup's `.log-list`/`.log-row`/`.pill` styles are
+//     persistence layer to back a real activity log, so a plain empty-state
+//     placeholder is shown instead of fabricated history -- swap in a real
+//     one once there's a real data source. (The mockup's `.log-list`/`.log-row`/`.pill` styles are
 //     reused for the batch summary screen below instead, since that's a
 //     genuinely similar list-of-records UI.)
 //   - A failed PO submission keeps the user on the Review screen with an
@@ -71,6 +80,12 @@ export function InvoiceUploader() {
   const [batchQueue, setBatchQueue] = useState<QueuedInvoice[] | null>(null);
   const [activeQueueIndex, setActiveQueueIndex] = useState<number | null>(null);
 
+  // The detected boundary for a single (non-bundle) upload -- used only to
+  // show a real page count in ReviewTable's doc-panel (see docInfo below).
+  // Not used for anything else; the batch path already carries per-invoice
+  // page ranges on each queue slot's own `boundary`.
+  const [singleInvoiceBoundary, setSingleInvoiceBoundary] = useState<InvoiceBoundary | null>(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<SubmitError | null>(null);
 
@@ -110,6 +125,7 @@ export function InvoiceUploader() {
     setFile(null);
     setBatchQueue(null);
     setActiveQueueIndex(null);
+    setSingleInvoiceBoundary(null);
     setSubmitting(false);
     setSubmitError(null);
     setSubmittedInvoice(null);
@@ -143,6 +159,9 @@ export function InvoiceUploader() {
 
       if (boundaries.length <= 1) {
         // Not a bundle -- identical to the original single-invoice flow.
+        // Boundary kept only for the doc-panel's page count (see docInfo
+        // below) -- detectInvoiceBoundaries() already ran above regardless.
+        setSingleInvoiceBoundary(boundaries[0] ?? null);
         await extractSingleInvoice(selectedFile, thisRequest);
         return;
       }
@@ -309,32 +328,45 @@ export function InvoiceUploader() {
 
   return (
     <div className="app-shell">
-      <div className="nav-rail">
-        <i
-          className={`ti ti-home ${tab === "dashboard" ? "active" : ""}`}
-          onClick={() => canGoTo("dashboard") && setTab("dashboard")}
-        />
-        <i
-          className={`ti ti-file-invoice ${tab === "edit" ? "active" : ""} ${!canGoTo("edit") ? "disabled" : ""}`}
+      {/* Single vertical nav, replacing the mockup's separate icon-only
+          nav-rail + top tabs bar -- those showed the same three
+          destinations twice. Gating logic (canGoTo) is unchanged from the
+          old tabs bar, just relocated: Confirmation still requires
+          poResult !== null || batchAllSubmitted, Review invoice still
+          requires an invoice (or batch) in progress. The old nav-rail's
+          third icon was a dead link to Dashboard (no history view exists) --
+          merging it with the Confirmation tab's real, correctly-gated
+          destination fixes that inconsistency as a side effect. */}
+      <div className="sidebar-nav">
+        <button
+          type="button"
+          className={`nav-item ${tab === "dashboard" ? "active" : ""}`}
+          onClick={() => setTab("dashboard")}
+        >
+          <i className="ti ti-home" />
+          Dashboard
+        </button>
+        <button
+          type="button"
+          className={`nav-item ${tab === "edit" ? "active" : ""}`}
+          disabled={!canGoTo("edit")}
           onClick={() => canGoTo("edit") && setTab("edit")}
-        />
-        {/* No activity-history view exists yet -- goes to Dashboard like the mockup's second nav icon did. */}
-        <i className="ti ti-history" onClick={() => canGoTo("dashboard") && setTab("dashboard")} />
+        >
+          <i className="ti ti-file-invoice" />
+          Review invoice
+        </button>
+        <button
+          type="button"
+          className={`nav-item ${tab === "confirm" ? "active" : ""}`}
+          disabled={!canGoTo("confirm")}
+          onClick={() => canGoTo("confirm") && setTab("confirm")}
+        >
+          <i className="ti ti-history" />
+          Confirmation
+        </button>
       </div>
 
       <div className="content">
-        <div className="tabs">
-          <button className={tab === "dashboard" ? "active" : ""} onClick={() => setTab("dashboard")}>
-            Dashboard
-          </button>
-          <button className={tab === "edit" ? "active" : ""} disabled={!canGoTo("edit")} onClick={() => setTab("edit")}>
-            Review invoice
-          </button>
-          <button className={tab === "confirm" ? "active" : ""} disabled={!canGoTo("confirm")} onClick={() => setTab("confirm")}>
-            Confirmation
-          </button>
-        </div>
-
         <header className="app-header">
           <div>
             <div className="brand-title">Comfort x Design</div>
@@ -354,6 +386,7 @@ export function InvoiceUploader() {
           <BatchInvoiceScreen
             queue={batchQueue!}
             activeIndex={activeQueueIndex}
+            fileName={file?.name ?? "invoice.pdf"}
             onRetry={handleRetryQueuedInvoice}
             onSkip={handleSkipQueuedInvoice}
             onConfirm={handleConfirm}
@@ -365,6 +398,12 @@ export function InvoiceUploader() {
         {tab === "edit" && !isBatch && extractedInvoice && (
           <ReviewTable
             invoice={extractedInvoice}
+            docInfo={{
+              filename: file?.name ?? "invoice.pdf",
+              pageCount: singleInvoiceBoundary
+                ? singleInvoiceBoundary.endPage - singleInvoiceBoundary.startPage + 1
+                : null,
+            }}
             onConfirm={handleConfirm}
             onCancel={startOver}
             submitting={submitting}
@@ -436,6 +475,19 @@ function DashboardScreen({
           {extractError}
         </div>
       )}
+
+      {/* Placeholder only -- ported from po-generator-draft.html's empty
+          activity-log state, NOT its populated "This week" list. This app
+          still has no persistence layer (see CLAUDE.md), so there's no real
+          history to show yet; rendering fabricated demo rows would be
+          actively misleading. Always shown (not conditional/toggleable)
+          until a real activity log exists. */}
+      <div className="section-label">This week</div>
+      <div className="empty-state">
+        <i className="ti ti-file-invoice" />
+        <div className="title">No purchase orders yet</div>
+        <div className="sub">Drop your first invoice above to get started.</div>
+      </div>
     </div>
   );
 }
@@ -453,6 +505,7 @@ function DashboardScreen({
 function BatchInvoiceScreen({
   queue,
   activeIndex,
+  fileName,
   onRetry,
   onSkip,
   onConfirm,
@@ -461,6 +514,7 @@ function BatchInvoiceScreen({
 }: {
   queue: QueuedInvoice[];
   activeIndex: number;
+  fileName: string;
   onRetry: (index: number) => void;
   onSkip: (index: number) => void;
   onConfirm: ReviewTableProps["onConfirm"];
@@ -502,6 +556,10 @@ function BatchInvoiceScreen({
       {item.status === "ready" && item.invoice && (
         <ReviewTable
           invoice={item.invoice}
+          docInfo={{
+            filename: fileName,
+            pageCount: item.boundary.endPage - item.boundary.startPage + 1,
+          }}
           onConfirm={onConfirm}
           onCancel={() => onSkip(activeIndex)}
           cancelLabel="Skip this invoice"
