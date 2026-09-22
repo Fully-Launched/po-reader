@@ -26,11 +26,14 @@ import { ReviewTable, type ReviewTableProps, type SubmitError } from "./ReviewTa
 //     is stricter and correct as-is.
 //   - The mockup's Dashboard screen has a "This week" activity log with
 //     example rows (Arco Supply INV-23538, etc.). This app has no
-//     persistence layer to back a real activity log, so a plain empty-state
-//     placeholder is shown instead of fabricated history -- swap in a real
-//     one once there's a real data source. (The mockup's `.log-list`/`.log-row`/`.pill` styles are
-//     reused for the batch summary screen below instead, since that's a
-//     genuinely similar list-of-records UI.)
+//     persistence layer to back a real activity log, and isn't building one
+//     at this time -- the section (including its empty-state variant, which
+//     briefly existed here) is omitted entirely rather than shown with
+//     fabricated or placeholder content. Add it back, with a real data
+//     source, if/when persistence is actually built. (The mockup's
+//     `.log-list`/`.log-row`/`.pill` styles are reused for the batch summary
+//     screen below instead, since that's a genuinely similar
+//     list-of-records UI backed by real, in-memory batch state.)
 //   - A failed PO submission keeps the user on the Review screen with an
 //     inline error (see ReviewTable's submitError prop) instead of
 //     discarding their edited draft -- the mockup has no error state to
@@ -476,19 +479,6 @@ function DashboardScreen({
           {extractError}
         </div>
       )}
-
-      {/* Placeholder only -- ported from po-generator-draft.html's empty
-          activity-log state, NOT its populated "This week" list. This app
-          still has no persistence layer (see CLAUDE.md), so there's no real
-          history to show yet; rendering fabricated demo rows would be
-          actively misleading. Always shown (not conditional/toggleable)
-          until a real activity log exists. */}
-      <div className="section-label">This week</div>
-      <div className="empty-state">
-        <i className="ti ti-file-invoice" />
-        <div className="title">No purchase orders yet</div>
-        <div className="sub">Drop your first invoice above to get started.</div>
-      </div>
     </div>
   );
 }

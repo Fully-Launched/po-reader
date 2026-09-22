@@ -194,24 +194,6 @@ header.app-header {
 .doc-status i { font-size: 14px; }
 .review-form { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
-/* Dashboard placeholder for when there's no activity history to show yet --
-   see InvoiceUploader.tsx's DashboardScreen. Always rendered as a plain
-   empty state, never a populated/faked log -- this app has no persistence
-   layer to back a real one (see CLAUDE.md). */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 2rem 1rem;
-  border: 0.5px solid var(--border);
-  border-radius: 8px;
-  margin-bottom: 1.25rem;
-}
-.empty-state i { font-size: 26px; color: var(--text-muted); margin-bottom: 10px; }
-.empty-state .title { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
-.empty-state .sub { font-size: 12px; color: var(--text-muted); }
-
 .log-list { border: 0.5px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 1.25rem; }
 .log-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 0.5px solid var(--border); font-size: 13px; }
 .log-row:last-child { border-bottom: none; }
@@ -322,8 +304,8 @@ footer.app-footer { text-align: right; margin-top: auto; padding-top: 1.25rem; f
    so it uses :focus-within instead of :focus-visible: this shows the same
    outline around the whole dropzone when a keyboard user tabs to the
    file input inside it. .log-row.clickable is included for when a real,
-   clickable activity-log row exists (see the Dashboard empty-state note
-   above) -- no such element is rendered yet. */
+   clickable activity-log row exists (there's no persistence layer for one
+   yet -- see CLAUDE.md) -- no such element is rendered today. */
 button:focus-visible,
 .nav-item:focus-visible,
 .log-row.clickable:focus-visible {
