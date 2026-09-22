@@ -8,16 +8,31 @@
 //
 //   - Arco Supply Co. and "Supply House" (which remaps to ServiceTitan
 //     vendor "Chase" -- see vendor-remap.ts, a SEPARATE concern from this
-//     module): consolidate ALL extracted line items into a single PO line,
-//     description "Bulk Rough Material," quantity 1, cost = sum of every
-//     line item's own total. No per-item Pricebook matching at all for
-//     these vendors -- see buildLineItemsForVendor()'s BULK_CONSOLIDATION
+//     module): every extracted line item still produces its OWN PO line,
+//     one-to-one -- this is NOT full consolidation. Per-item Pricebook
+//     matching is attempted for each item first; an item with no specific
+//     match falls back to the generic "Bulk Rough Material" skuId for THAT
+//     item alone (its own real description/quantity/cost), not summed with
+//     anything else. See buildLineItemsForVendor()'s bulk-consolidation
 //     branch below.
+//     CORRECTED after a live bug report: an earlier version of this branch
+//     collapsed ALL line items into a single PO line (qty 1, cost = sum of
+//     everything) regardless of whether individual items would have
+//     matched the Pricebook. A real 56-item Arco invoice confirmed this
+//     live (PO 2117-002, one $4,411.64 line) -- traced back to a
+//     misimplementation of the client-confirmed rule, not something
+//     actually confirmed that way on the call. Fixed to always produce
+//     one PO line per extracted line item, matching every other vendor's
+//     line count; only the SKU an individual unmatched item falls back to
+//     is what's specific to this vendor pair, not the line count.
 //   - Any vendor name containing "TEC" (which remaps to ServiceTitan vendor
 //     "TEC" -- see vendor-remap.ts): keep per-item Pricebook matching for
 //     items that DO match; anything that doesn't match is consolidated into
 //     a single "Bulk Equipment Material" catch-all line (quantity 1, cost =
 //     sum of the unmatched items' totals) instead of blocking submission.
+//     Unlike Arco/Supply House above, TEC's unmatched items ARE genuinely
+//     meant to consolidate into one catch-all line -- that part of the
+//     original design was correct and is unchanged.
 //   - Any other/unrecognized vendor: falls back to the original strict
 //     per-item behavior (fail loudly naming every unmatched description).
 //     Only 3 vendors exist for this tool (see CLAUDE.md Project Purpose) --
@@ -60,13 +75,14 @@ function sumTotals(items: InvoiceLineItem[]): number {
 
 /**
  * Per-item match counts, for surfacing a "X/Y items matched to Pricebook"
- * indicator in the review table -- NOT applicable to bulk-consolidation
- * (there's no per-item matching to report on), so buildLineItemsForVendor()
- * returns `null` for that strategy rather than an all-zero/misleading
- * summary. "strict" gets one too since it also runs per-item matching, even
- * though its only successful outcome is catchAllCount: 0 (any unmatched item
- * fails the whole call instead of falling into a bucket -- see the strict
- * branch below).
+ * indicator in the review table. `buildLineItemsForVendor()` returns `null`
+ * for bulk-consolidation -- NOT because that branch has no per-item
+ * matching to report on (it does, as of the per-item-line-items fix, same
+ * as catch-all/strict), but because wiring a match-count indicator for it
+ * into the review table is a deliberate follow-up, out of scope here. "strict"
+ * gets a real summary since it also runs per-item matching, even though its
+ * only successful outcome is catchAllCount: 0 (any unmatched item fails the
+ * whole call instead of falling into a bucket -- see the strict branch below).
  */
 export interface LineItemMatchSummary {
   strategy: "catch-all" | "strict";
@@ -97,29 +113,46 @@ export async function buildLineItemsForVendor(
   const strategy = resolveLineItemStrategy(invoiceVendorName);
 
   if (strategy === "bulk-consolidation") {
-    const skuId = await client.findMaterialSkuIdByDescription(BULK_ROUGH_MATERIAL_DESCRIPTION);
-    if (skuId === null) {
-      return {
-        error: notFoundError(
-          "Pricebook item",
-          BULK_ROUGH_MATERIAL_DESCRIPTION,
-          `add "${BULK_ROUGH_MATERIAL_DESCRIPTION}" as a Pricebook Material in ServiceTitan, then try again.`,
-          `required for "${invoiceVendorName}" invoices`,
-        ),
-      };
+    // One PoLineItem per extracted line item -- NOT collapsed. An item with
+    // no specific Pricebook match falls back to the generic "Bulk Rough
+    // Material" skuId for that ONE line only, keeping its own real
+    // description/quantity/cost; it is never summed with other items. The
+    // bulk skuId is looked up at most once (lazily, on the first item that
+    // actually needs it), not once per unmatched item.
+    const items: PoLineItem[] = [];
+    let bulkSkuId: number | null = null;
+    for (const item of lineItems) {
+      let skuId = await client.findMaterialSkuIdByDescription(item.description);
+      if (skuId === null) {
+        if (bulkSkuId === null) {
+          bulkSkuId = await client.findMaterialSkuIdByDescription(BULK_ROUGH_MATERIAL_DESCRIPTION);
+          if (bulkSkuId === null) {
+            return {
+              error: notFoundError(
+                "Pricebook item",
+                BULK_ROUGH_MATERIAL_DESCRIPTION,
+                `add "${BULK_ROUGH_MATERIAL_DESCRIPTION}" as a Pricebook Material in ServiceTitan, then try again.`,
+                `required as a fallback for unmatched line items on "${invoiceVendorName}" invoices`,
+              ),
+            };
+          }
+        }
+        skuId = bulkSkuId;
+      }
+      items.push({
+        skuId,
+        description: item.description,
+        vendorPartNumber: item.vendorPartNumber ?? "",
+        cost: item.unitPrice,
+        quantity: item.quantity,
+      });
     }
-    return {
-      items: [
-        {
-          skuId,
-          description: BULK_ROUGH_MATERIAL_DESCRIPTION,
-          vendorPartNumber: "",
-          cost: sumTotals(lineItems),
-          quantity: 1,
-        },
-      ],
-      matchSummary: null,
-    };
+    // matchSummary intentionally still null here, same as before this fix --
+    // this branch now DOES have real per-item match data worth reporting
+    // (unlike before, when there was genuinely nothing to report), but
+    // wiring that into the review table's "X/Y matched" indicator is left
+    // as a deliberate follow-up, out of scope for this line-item-count fix.
+    return { items, matchSummary: null };
   }
 
   if (strategy === "catch-all") {
