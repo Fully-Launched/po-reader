@@ -291,7 +291,20 @@ input:disabled, select:disabled { background: #F9FAFB; color: var(--text-muted);
 
 footer.app-footer { text-align: right; margin-top: auto; padding-top: 1.25rem; font-size: 11px; color: var(--text-muted); }
 
-.confirm-wrap { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 2.5rem 1rem; }
+/* Constrained + centered rather than stretching full-width -- the content
+   area spans the whole viewport since the full-bleed layout change, but a
+   centered success icon/message/card/buttons block reads badly that wide.
+   Applies to both the single-invoice ConfirmationScreen and the batch
+   BatchSummaryScreen -- both share this one class. */
+.confirm-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 2.5rem 1rem;
+  max-width: 560px;
+  margin: 0 auto;
+}
 .confirm-icon { width: 52px; height: 52px; border-radius: 50%; background: var(--teal-bg); display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
 .confirm-icon i { font-size: 26px; color: var(--teal-text); }
 .confirm-title { font-size: 17px; font-weight: 500; margin-bottom: 6px; }

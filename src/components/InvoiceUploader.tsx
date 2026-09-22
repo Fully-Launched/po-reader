@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import type { ExtractedInvoice, InvoiceBoundary } from "@/lib/types";
+import { resolveVendorDisplayName } from "@/lib/servicetitan/vendor-remap";
 import { ReviewTable, type ReviewTableProps, type SubmitError } from "./ReviewTable";
 
 // Top-level app shell: vertical sidebar nav + branded header + one of three
@@ -611,16 +612,14 @@ function BatchSummaryScreen({
           {skippedCount > 0 ? ` (${skippedCount} skipped -- not a valid invoice)` : ""}.
         </div>
 
-        {/* Safety-net reminder, not a status claim: whether a PO ends up Received
-            depends entirely on a ServiceTitan account-level "Automatically
-            Receive" setting on the PO Type used, configured in Kevin's own
-            ServiceTitan account -- this app never sets receive status itself.
-            Each row below shows the actual status ServiceTitan returned for
-            that PO (see extractPoStatus above) rather than assuming one. */}
+        {/* Fixed, simple reminder -- deliberately no longer references the
+            actual returned status or explains WHY (that reasoning belongs
+            in CLAUDE.md, not something the user needs to read every time
+            they create a PO). Each row below still shows the actual status
+            ServiceTitan returned for that PO (see extractPoStatus above). */}
         <div className="banner banner-warning" style={{ marginTop: 12 }}>
           <i className="ti ti-alert-triangle" />
-          Remember to double-check each PO&apos;s status in ServiceTitan matches what&apos;s shown below.
-          Receive status depends entirely on a setting on the PO Type used, not on this app.
+          Remember to manually receive these invoices in ServiceTitan.
         </div>
 
         <div className="log-list" style={{ marginTop: 16, width: "100%" }}>
@@ -636,7 +635,8 @@ function BatchSummaryScreen({
                 <div className="left">
                   <i className="ti ti-file-invoice" />
                   <span>
-                    {item.invoice?.vendorName ?? "Invoice"} &middot; #{item.invoice?.invoiceNumber ?? "—"}
+                    {item.invoice ? resolveVendorDisplayName(item.invoice.vendorName) : "Invoice"} &middot; #
+                    {item.invoice?.invoiceNumber ?? "—"}
                   </span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -708,26 +708,22 @@ function ConfirmationScreen({
               question in CLAUDE.md, not something this tool has confirmed either way. */}
         </div>
 
-        {/* Safety-net reminder, not a status claim: whether this PO is Received
-            depends entirely on a ServiceTitan-side "Automatically Receive"
-            setting on the PO Type used, configured in Kevin's own ServiceTitan
-            account -- this app never sets receive status itself, it only
-            selects which existing PO Type to reference. The status named here
-            is whatever ServiceTitan actually returned above, not an assumption
-            -- keep this reminder regardless, as a safety net against
-            ServiceTitan-side drift (a stale response, a PO Type reconfigured
-            after the fact, etc). */}
+        {/* Fixed, simple reminder -- deliberately no longer references the
+            actual returned status or explains WHY (that reasoning belongs
+            in CLAUDE.md, not something the user needs to read every time
+            they create a PO). The confirm-sub line above still shows
+            whatever status ServiceTitan actually returned (see poStatus
+            above) -- only this banner's copy was simplified. */}
         <div className="banner banner-warning" style={{ marginTop: 12 }}>
           <i className="ti ti-alert-triangle" />
-          Remember to double-check this PO shows as <strong>{poStatus ?? "the expected status"}</strong> in ServiceTitan.
-          Receive status depends entirely on a setting on the PO Type used, not on this app.
+          Remember to manually receive this invoice in ServiceTitan.
         </div>
 
         {invoice && (
           <div className="confirm-card">
             <div className="confirm-row">
               <span>Vendor</span>
-              <span>{invoice.vendorName}</span>
+              <span>{resolveVendorDisplayName(invoice.vendorName)}</span>
             </div>
             {invoice.projectNumber && (
               <div className="confirm-row">
