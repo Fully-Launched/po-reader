@@ -105,6 +105,55 @@ function splitBannerLead(message: string): { lead: string; rest: string } {
   return match ? { lead: match[1], rest: match[2] } : { lead: message, rest: "" };
 }
 
+// Splits on the first " -- " -- the project's canonical "what's wrong --
+// what to do" separator (see error-messages.ts's style guide), falling
+// back to splitBannerLead's sentence-based split, then to the whole
+// message as the lead. Kept SEPARATE from splitBannerLead rather than
+// reordering it: a submitError message can have a sentence break BEFORE
+// its own " -- " (e.g. `No ServiceTitan job found... "1717". Job
+// attachment is required -- correct the project number...`), and
+// dash-first splitting there would pull "Job attachment is required" into
+// the bold lead -- a regression on banner A's already-verified behavior.
+// This is for reviewWarnings()' plain dash-separated messages instead (no
+// sentence punctuation to split on at all), used by
+// buildExtractionNotes() below.
+function splitDashLead(message: string): { lead: string; rest: string } {
+  const match = message.match(/^([\s\S]*?)\s+--\s+([\s\S]*)$/);
+  return match ? { lead: match[1], rest: match[2] } : splitBannerLead(message);
+}
+
+/**
+ * Structured, actionable extraction-confidence notes for the review
+ * screen's banner B -- each a short bold headline + short non-bold detail,
+ * derived from a specific KNOWN signal (a missing field, a per-item
+ * low-confidence flag). Deliberately NEVER surfaces `ExtractedInvoice.notes`
+ * verbatim -- that free-text field can contain a full paragraph of
+ * unrelated reasoning (invoice-date sourcing, freight absence, payment
+ * method, ship-to address, print legibility, etc.) that reads as a raw
+ * dumped reasoning chain, not an actionable banner message. Add another
+ * structured check here, in this same {headline, detail} shape, for any
+ * future low-confidence scenario that needs surfacing (e.g. an ambiguous
+ * vendor match) -- never fall back to displaying raw notes text again.
+ */
+function buildExtractionNotes(
+  draft: ExtractedInvoice,
+  warnings: string[],
+): { headline: string; detail: string }[] {
+  const notes: { headline: string; detail: string }[] = [];
+  if (!draft.projectNumber?.trim()) {
+    notes.push({
+      headline: "No project/job number found",
+      detail:
+        "This invoice has no job or project number printed on it. Enter the correct ServiceTitan job number below, or confirm this is a general purchase with no job attached.",
+    });
+  }
+  for (const warning of warnings) {
+    const { lead, rest } = splitDashLead(warning);
+    notes.push({ headline: lead, detail: rest });
+  }
+  return notes;
+}
+
 // Generic loader for the Business Unit / Inventory Location dropdowns --
 // both follow the identical fetch-on-mount / loading / error / empty /
 // auto-select-single-option pattern, just against different endpoints.
@@ -342,6 +391,7 @@ export function ReviewTable({ invoice, docInfo, onConfirm, onCancel, cancelLabel
   }
 
   const warnings = reviewWarnings(draft);
+  const extractionNotes = buildExtractionNotes(draft, warnings);
   const accuracyIssues = computeAccuracyIssues(draft);
   const idFilled = (id: string) => id.trim() !== "" && !Number.isNaN(Number(id));
   const canSubmit =
@@ -665,32 +715,39 @@ export function ReviewTable({ invoice, docInfo, onConfirm, onCancel, cancelLabel
             </div>
           )}
 
-          {/* Status banner B -- extraction-confidence notes: which specific
-              line items Claude itself wasn't confident about
-              (InvoiceLineItem.lowConfidence, surfaced via reviewWarnings()),
-              plus any general extraction notes (page count, footer/field
-              sourcing, freight or misc-charge breakdowns, etc.). SEPARATE
+          {/* Status banner B -- extraction-confidence notes (buildExtractionNotes
+              above): a missing project/job number, or which specific line
+              items Claude itself wasn't confident about
+              (InvoiceLineItem.lowConfidence, via reviewWarnings()). SEPARATE
               from banner A above on purpose -- this is about extraction
-              quality, not submission status or arithmetic. Renders only
-              when there's actually something to say (no matching "all
-              clear" green state here -- banner A already covers that,
-              showing a second green banner here would reintroduce the
-              duplicate-banner problem this screen already had once). */}
-          {(warnings.length > 0 || draft.notes.trim()) && (
+              quality, not submission status or arithmetic. Each entry is a
+              short bold headline + short non-bold detail -- NEVER raw text
+              from ExtractedInvoice.notes, which can be a full paragraph of
+              unrelated reasoning (date sourcing, freight absence, payment
+              method, ship-to address, legibility, etc.) with nothing
+              actionable in it for this screen. Renders only when there's
+              actually something to say (no matching "all clear" green
+              state here -- banner A already covers that, showing a second
+              green banner here would reintroduce the duplicate-banner
+              problem this screen already had once). */}
+          {extractionNotes.length > 0 && (
             <div className="banner banner-warning">
               <i className="ti ti-alert-triangle" />
               <div>
-                {warnings.length > 0 && (
+                {extractionNotes.length === 1 ? (
                   <>
-                    <strong>Flagged for review</strong> -- please check before submitting:
-                    <ul>
-                      {warnings.map((warning) => (
-                        <li key={warning}>{warning}</li>
-                      ))}
-                    </ul>
+                    <strong>{extractionNotes[0].headline}</strong>{" "}
+                    {extractionNotes[0].detail}
                   </>
+                ) : (
+                  <ul>
+                    {extractionNotes.map((note) => (
+                      <li key={note.headline}>
+                        <strong>{note.headline}</strong> {note.detail}
+                      </li>
+                    ))}
+                  </ul>
                 )}
-                {draft.notes.trim() && <div>{draft.notes}</div>}
               </div>
             </div>
           )}
