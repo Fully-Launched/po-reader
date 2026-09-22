@@ -291,6 +291,38 @@ export function ReviewTable({ invoice, docInfo, onConfirm, onCancel, cancelLabel
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Reactive invalidation of a server-side submission error, once the user
+  // edits the specific field it named -- previously the red banner/border
+  // persisted until the next submit attempt actually re-validated it, even
+  // after a plausible-looking correction. Snapshots that field's value at
+  // the moment the error arrives (this effect only re-runs when the
+  // submitError PROP changes, not on every keystroke), then every render
+  // compares the current draft value against that snapshot; once they
+  // differ, the error is treated as resolved for display purposes without
+  // waiting on another round-trip. An error with no `field` (a generic
+  // network/upstream failure -- nothing specific to react to) can't be
+  // invalidated this way and still persists until the next submit, same as
+  // before.
+  const [erroredFieldSnapshot, setErroredFieldSnapshot] = useState<
+    { field: "vendorName" | "projectNumber"; value: string } | null
+  >(null);
+  useEffect(() => {
+    if (submitError?.field === "vendorName") {
+      setErroredFieldSnapshot({ field: "vendorName", value: draft.vendorName });
+    } else if (submitError?.field === "projectNumber") {
+      setErroredFieldSnapshot({ field: "projectNumber", value: draft.projectNumber ?? "" });
+    } else {
+      setErroredFieldSnapshot(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submitError]);
+  const submitErrorResolved =
+    erroredFieldSnapshot !== null &&
+    submitError?.field === erroredFieldSnapshot.field &&
+    (erroredFieldSnapshot.field === "vendorName" ? draft.vendorName : draft.projectNumber ?? "") !==
+      erroredFieldSnapshot.value;
+  const effectiveSubmitError = submitErrorResolved ? null : submitError;
+
   if (isNotAnInvoice(draft)) {
     return (
       <div className="confirm-wrap">
@@ -321,13 +353,15 @@ export function ReviewTable({ invoice, docInfo, onConfirm, onCancel, cancelLabel
 
   // Proactive red-border state, mirroring hasRequiredFields()'s checks --
   // shown as soon as the screen loads with a required field empty, not only
-  // after a failed submission attempt. `submitError?.field` is ALSO checked
-  // here (not just the empty-value case) since a server-side failure can
-  // fire on a NON-empty value the client can't validate itself (e.g. a
-  // vendor name that's present but doesn't match any ServiceTitan vendor,
-  // or a project number that's present but matches no job).
-  const vendorNameInvalid = !draft.vendorName.trim() || submitError?.field === "vendorName";
-  const projectNumberInvalid = !draft.projectNumber?.trim() || submitError?.field === "projectNumber";
+  // after a failed submission attempt. `effectiveSubmitError?.field` is ALSO
+  // checked here (not just the empty-value case) since a server-side
+  // failure can fire on a NON-empty value the client can't validate itself
+  // (e.g. a vendor name that's present but doesn't match any ServiceTitan
+  // vendor, or a project number that's present but matches no job) --
+  // `effectiveSubmitError` (not the raw prop) so this clears the moment the
+  // user edits the named field, not only on the next submit attempt.
+  const vendorNameInvalid = !draft.vendorName.trim() || effectiveSubmitError?.field === "vendorName";
+  const projectNumberInvalid = !draft.projectNumber?.trim() || effectiveSubmitError?.field === "projectNumber";
   const invalidFieldStyle = (invalid: boolean) => (invalid ? { borderColor: "var(--red-text)" } : undefined);
 
   function updateField<K extends keyof ExtractedInvoice>(key: K, value: ExtractedInvoice[K]) {
@@ -581,20 +615,21 @@ export function ReviewTable({ invoice, docInfo, onConfirm, onCancel, cancelLabel
             </div>
           </div>
     
-          {/* Single status banner -- exactly one shown at a time, prioritized
-              red (submission error) > yellow (numbers don't reconcile, or a
-              line item flagged low-confidence) > green (neither). This
-              replaces three banners that used to render independently (and
-              could show two greens at once, or a green next to an amber):
-              the submission-error banner that used to sit near the submit
-              button below, the live math-reconciliation banner
-              (computeAccuracyIssues), and the extraction-confidence banner
-              (reviewWarnings). WARNING ONLY when yellow -- still never
+          {/* Status banner A -- submission status + live math reconciliation
+              ONLY, prioritized red (submission error) > yellow (numbers
+              don't reconcile) > green. Deliberately does NOT include
+              extraction-confidence content (per-item lowConfidence
+              warnings, draft.notes) -- an earlier version folded those in
+              here too, which meant unrelated notes (page count, footer
+              references, freight breakdowns, etc.) showed up underneath a
+              banner that was supposed to be purely about the subtotal/total
+              math. That content has its own separate banner B below instead
+              of being dropped. WARNING ONLY when yellow -- still never
               disables the submit button; only hasRequiredFields() (via
               canSubmit below) gates submission. */}
-          {submitError ? (
+          {effectiveSubmitError ? (
             (() => {
-              const { lead, rest } = splitBannerLead(submitError.message);
+              const { lead, rest } = splitBannerLead(effectiveSubmitError.message);
               return (
                 <div className="banner banner-error">
                   <i className="ti ti-alert-circle" />
@@ -605,24 +640,20 @@ export function ReviewTable({ invoice, docInfo, onConfirm, onCancel, cancelLabel
                 </div>
               );
             })()
-          ) : accuracyIssues.length > 0 || warnings.length > 0 ? (
+          ) : accuracyIssues.length > 0 ? (
             <div className="banner banner-warning">
               <i className="ti ti-alert-triangle" />
               <div>
-                <strong>{accuracyIssues.length > 0 ? "Numbers don't reconcile" : "Flagged for review"}</strong>{" "}
-                {(() => {
-                  const issues = [...accuracyIssues, ...warnings];
-                  return issues.length === 1 ? (
-                    issues[0]
-                  ) : (
-                    <ul>
-                      {issues.map((issue) => (
-                        <li key={issue}>{issue}</li>
-                      ))}
-                    </ul>
-                  );
-                })()}
-                {draft.notes && <div>{draft.notes}</div>}
+                <strong>Numbers don&apos;t reconcile</strong>{" "}
+                {accuracyIssues.length === 1 ? (
+                  accuracyIssues[0]
+                ) : (
+                  <ul>
+                    {accuracyIssues.map((issue) => (
+                      <li key={issue}>{issue}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
           ) : (
@@ -630,6 +661,36 @@ export function ReviewTable({ invoice, docInfo, onConfirm, onCancel, cancelLabel
               <i className="ti ti-shield-check" />
               <div>
                 <strong>Accuracy check passed:</strong> No issues flagged.
+              </div>
+            </div>
+          )}
+
+          {/* Status banner B -- extraction-confidence notes: which specific
+              line items Claude itself wasn't confident about
+              (InvoiceLineItem.lowConfidence, surfaced via reviewWarnings()),
+              plus any general extraction notes (page count, footer/field
+              sourcing, freight or misc-charge breakdowns, etc.). SEPARATE
+              from banner A above on purpose -- this is about extraction
+              quality, not submission status or arithmetic. Renders only
+              when there's actually something to say (no matching "all
+              clear" green state here -- banner A already covers that,
+              showing a second green banner here would reintroduce the
+              duplicate-banner problem this screen already had once). */}
+          {(warnings.length > 0 || draft.notes.trim()) && (
+            <div className="banner banner-warning">
+              <i className="ti ti-alert-triangle" />
+              <div>
+                {warnings.length > 0 && (
+                  <>
+                    <strong>Flagged for review</strong> -- please check before submitting:
+                    <ul>
+                      {warnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {draft.notes.trim() && <div>{draft.notes}</div>}
               </div>
             </div>
           )}
