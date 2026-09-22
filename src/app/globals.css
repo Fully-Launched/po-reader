@@ -144,6 +144,21 @@ header.app-header {
   height: 100%;
 }
 
+/* Low-visual-weight quick reference below the dropzone -- a reminder of
+   the golden path, not a prominent banner. */
+.dropzone-help {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: -0.75rem 0 1.25rem;
+}
+.dropzone-help ol {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.dropzone-help li {
+  margin-bottom: 2px;
+}
+
 /* Plain, non-interactive loading status -- NOT .dropzone: no dashed border,
    hover state, or pointer cursor, since nothing here is clickable (e.g. the
    batch flow's lazy per-invoice extraction step). */

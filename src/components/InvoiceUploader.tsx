@@ -495,6 +495,17 @@ function DashboardScreen({
         )}
       </div>
 
+      {/* Quick reference, not a primary UI element -- small/muted on
+          purpose, sits below the dropzone regardless of upload state. */}
+      <div className="dropzone-help">
+        Works with any vendor already set up in ServiceTitan. After uploading:
+        <ol>
+          <li>Review the extracted details and fix any errors</li>
+          <li>Make sure the Project/job number matches an existing ServiceTitan job</li>
+          <li>Click Create purchase order to submit</li>
+        </ol>
+      </div>
+
       {extractError && (
         <div className="banner banner-error">
           <i className="ti ti-alert-circle" />

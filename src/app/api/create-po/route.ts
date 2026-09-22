@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
       notFoundError(
         "vendor",
         serviceTitanVendorName,
-        "correct the vendor name in the review table to match an existing ServiceTitan vendor.",
+        "correct the vendor name in the review table to match an existing ServiceTitan vendor, or this vendor may need to be added to ServiceTitan first before it can be used here.",
         serviceTitanVendorName !== invoice.vendorName ? `remapped from invoice vendor "${invoice.vendorName}"` : undefined,
       ),
       422,
