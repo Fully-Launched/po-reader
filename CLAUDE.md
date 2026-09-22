@@ -176,6 +176,22 @@ The UI is built from a design mockup (`po-generator-draft.html`, not part of thi
 
 The review screen is a deliberate design choice, not a placeholder to be removed later — Claude's extraction is not assumed to be perfect, and PO creation (which, per the correction above, MAY auto-receive and auto-bill depending on the PO Type's own ServiceTitan-side settings — not something this app controls or assumes) is not something we want to auto-fire on unverified data.
 
+## Authentication
+
+Gates the entire app behind a single Supabase Auth account (Kevin's) — deliberately scoped to just that, not a broader user-management system. There is no sign-up flow, no roles/permissions model, and no plan to add multi-user support unless that changes; if a second real user is ever needed, that's a new decision to make then, not something this implementation anticipates.
+
+- **Supabase project**: `po-reader` (id `lvhyctrhspufiunqwbll`, region `ca-central-1`), the existing project already connected via the MCP connector — a SEPARATE Supabase project from `Fully-Launched's Project`, don't confuse the two.
+- **Auth method**: email/password only (`supabase.auth.signInWithPassword()`), no OAuth/magic-link/SSO. Uses the modern publishable-key API (`sb_publishable_...`), not the legacy anon JWT key, since this is a newly-created project.
+- **`src/middleware.ts`** — the actual enforcement boundary, not just a frontend convenience. Runs on every request matching `config.matcher` (everything except `_next/static`, `_next/image`, `favicon.ico`, `*.svg` — i.e. every page AND every `/api/*` route). Calls `supabase.auth.getClaims()` (validates the JWT; deliberately NOT `getSession()`, which Supabase's own current docs warn against trusting server-side) to check for a valid session:
+  - No session + page request → redirected to `/login`.
+  - No session + `/api/*` request → `401 { error }` JSON response, never reaches the route handler. This is what actually stops someone from bypassing the login screen by hitting an API route directly — verified live (`curl` against a local build with no session cookie: `/` → `307` to `/login`, `/api/business-units` and `POST /api/create-po` → `401`, `/login` itself → `200`).
+  - Valid session + `/login` → redirected to `/` (don't show the login form to someone already signed in).
+- **`src/app/login/page.tsx`** — the sole unauthenticated entry point. A plain email/password form, nothing from the dashboard/upload UI rendered behind or before it. On success, redirects to `/` (the Dashboard).
+- **Logout** — a "Log out" item pinned to the bottom of the sidebar nav in `InvoiceUploader.tsx` (`handleLogout()`), calls `supabase.auth.signOut()` then redirects to `/login`. Not the real enforcement point (middleware is) — just the explicit, user-initiated path there instead of waiting for a subsequent blocked request.
+- **`src/lib/supabase/client.ts`** / **`src/lib/supabase/server.ts`** — browser and server Supabase clients respectively, following Supabase's current `@supabase/ssr` App Router pattern (cookie-based session, not localStorage). The server client is used for reading the session in Server Components; `middleware.ts` has its own inline client (needs direct request/response cookie access a shared helper can't cleanly provide) rather than importing `server.ts`.
+- **Kevin's account** — created directly via Supabase, not through any sign-up UI in this app (there isn't one). No self-service account creation exists or is planned.
+- **Deliberately NOT done, out of scope**: no password-reset/forgot-password UI, no "change password" UI, no user-management screen, no per-route/per-API-handler auth re-checks beyond what middleware already covers (redundant given middleware runs before every matched request reaches a handler at all).
+
 ## ServiceTitan Integration Specifics
 
 - **App type:** Customer-Built App (not a Marketplace/Certified app). Built exclusively for Comfort x Design's tenant. Not for redistribution.
@@ -240,6 +256,8 @@ All of the following must be set as **Vercel environment variables** — never c
 - `SERVICETITAN_ENVIRONMENT` — `"integration"` (sandbox, default) or `"production"`
 - `SERVICETITAN_AUTO_RECEIVE_PO_TYPE_NAME` — optional, defaults to `"Supply House Run"`; the name of the PO Type with "Automatically Receive" enabled (see Open Questions — production may need a different value)
 - `ANTHROPIC_API_KEY`
+- `NEXT_PUBLIC_SUPABASE_URL` — `https://lvhyctrhspufiunqwbll.supabase.co` (the "po-reader" Supabase project). `NEXT_PUBLIC_`-prefixed since the browser client (`src/lib/supabase/client.ts`) needs it too, same as the server client and `middleware.ts` — see the Authentication section below.
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — the project's publishable key (`sb_publishable_...`), safe to expose client-side by design (it's the modern replacement for the legacy JWT anon key, same trust level). NOT the secret/service-role key -- this app never uses or has access to that.
 
 **Important:** `.env` must be added to `.gitignore` before any credentials are ever written to disk locally. Do not commit a `.env` file at any point, even temporarily.
 
@@ -275,6 +293,7 @@ All of the following must be set as **Vercel environment variables** — never c
 - [x] **Icon CDN link was broken, now fixed.** `layout.tsx`'s tabler-icons `<link>` pointed at `.../tabler-icons/2.47.0/iconfont/tabler-icons.min.css` -- CONFIRMED 404 via `curl` (that version/path never existed on cdnjs; versions jump 1.35.0 -> 3.10.0, and the CSS file moved out of an `iconfont/` subdirectory in the 3.x releases). This silently broke every icon in the app -- found while investigating a reported empty circle on the confirmation screen (the checkmark icon). Fixed to `.../tabler-icons/3.47.0/tabler-icons.min.css`, CONFIRMED 200 and containing every `ti-*` class this app uses (`ti-check`, `ti-loader-2`, `ti-shield-check`, `ti-alert-triangle`, etc.) via `curl`. **Still not visually confirmed in a real browser** (no Chrome extension connection this session) -- worth a visual pass to double-check icon rendering (glyph shapes, sizing) once available, though the CDN link itself is now confirmed correct.
 - [x] "View in ServiceTitan" deep link wired up — confirmed sandbox pattern, production base domain inferred but not independently confirmed (see Open Questions)
 - [ ] Activity log / recent-invoices view built (currently omitted -- no persistence layer exists, see Open Questions)
+- [x] Supabase Auth gate built and verified (middleware-enforced on both pages and `/api/*`, single email/password account, no self-service sign-up -- see Authentication section). **Still needs**: `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` added to Vercel env vars, and Kevin's account actually created (blocked on getting his email).
 
 ## Production Rollout Checklist
 

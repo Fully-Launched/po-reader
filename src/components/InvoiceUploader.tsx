@@ -1,8 +1,10 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { ExtractedInvoice, InvoiceBoundary } from "@/lib/types";
 import { resolveVendorDisplayName } from "@/lib/servicetitan/vendor-remap";
+import { createClient } from "@/lib/supabase/client";
 import { ReviewTable, type ReviewTableProps, type SubmitError } from "./ReviewTable";
 
 // Top-level app shell: vertical sidebar nav + branded header + one of three
@@ -64,6 +66,7 @@ interface QueuedInvoice {
 }
 
 export function InvoiceUploader() {
+  const router = useRouter();
   const [tab, setTab] = useState<Tab>("dashboard");
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
@@ -119,6 +122,18 @@ export function InvoiceUploader() {
     if (target === "edit") return (extractedInvoice !== null || isBatch) && tab !== "confirm";
     if (target === "confirm") return poResult !== null || batchAllSubmitted;
     return false;
+  }
+
+  // Signs out of Supabase (clears the session cookie via the browser
+  // client) and sends the user to /login. middleware.ts is the real
+  // enforcement point -- once the session is gone, it redirects every
+  // other route here anyway -- this is just the explicit, user-initiated
+  // path there rather than waiting for a blocked request to trigger it.
+  async function handleLogout() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
   }
 
   function startOver() {
@@ -367,6 +382,13 @@ export function InvoiceUploader() {
         >
           <i className="ti ti-history" />
           Confirmation
+        </button>
+        {/* Pinned to the bottom of the sidebar via margin-top: auto, apart
+            from the three destination tabs above -- logging out isn't a
+            "where am I" nav destination like the others. */}
+        <button type="button" className="nav-item" style={{ marginTop: "auto" }} onClick={handleLogout}>
+          <i className="ti ti-logout" />
+          Log out
         </button>
       </div>
 

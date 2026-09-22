@@ -316,3 +316,21 @@ button:focus-visible,
   outline: 2px solid var(--blue);
   outline-offset: 1px;
 }
+
+/* Login screen -- the entry point when unauthenticated (see middleware.ts).
+   Deliberately outside .app-shell -- there's no sidebar/tabs to show until
+   a session exists, just a centered form. */
+.login-page {
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: #F3F4F6;
+}
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg);
+}
